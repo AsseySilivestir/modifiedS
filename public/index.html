@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>modifiedS — Bantu backend for Splannes</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card: #1e293b;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --accent: #10b981;
+      --border: #334155;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background: linear-gradient(135deg, #0f172a 0%, #134e4a 100%);
+      color: var(--text);
+      min-height: 100vh;
+    }
+    .wrap { max-width: 920px; margin: 0 auto; padding: 48px 24px; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 28px;
+      margin-bottom: 20px;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.35);
+    }
+    h1 { margin: 0 0 4px; font-size: 30px; }
+    h1 .v { color: var(--accent); }
+    .sub { color: var(--muted); margin: 0 0 24px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+    .stat { background: rgba(16,185,129,0.08); border: 1px solid rgba(16,185,129,0.25); padding: 14px; border-radius: 10px; }
+    .stat .k { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; }
+    .stat .v { color: var(--accent); font-size: 22px; font-weight: 600; margin-top: 4px; }
+    pre { background: #020617; color: #86efac; padding: 14px; border-radius: 8px; overflow-x: auto; font-size: 13px; }
+    code { color: #fde68a; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .tag { display: inline-block; padding: 2px 8px; background: rgba(16,185,129,0.18); color: var(--accent); border-radius: 6px; font-size: 12px; margin-right: 6px; }
+    ul { margin: 0; padding-left: 18px; }
+    li { margin: 6px 0; }
+    button {
+      background: var(--accent); color: #042f1a; border: 0; padding: 10px 16px;
+      border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 14px;
+    }
+    button:hover { filter: brightness(1.1); }
+    #out { margin-top: 14px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>modifiedS <span class="v">v1.0.0</span></h1>
+      <p class="sub">Bantu + Sua rewrite of the Splannes Next.js backend · running on
+        <span class="tag">bantu v1.2.2</span>
+        <span class="tag">sua-http</span>
+        <span class="tag">sqlite</span>
+      </p>
+
+      <div class="grid" id="stats">
+        <div class="stat"><div class="k">Backend</div><div class="v">Bantu</div></div>
+        <div class="stat"><div class="k">Runtime</div><div class="v">Sua</div></div>
+        <div class="stat"><div class="k">Database</div><div class="v">SQLite</div></div>
+        <div class="stat"><div class="k">Replaces</div><div class="v">Next.js</div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Smoke test</h2>
+      <p class="sub">Hit the live API to confirm the Bantu server is responding.</p>
+      <button onclick="testApi()">Run /api/health</button>
+      <button onclick="loadRoadmaps()">Load /api/roadmaps</button>
+      <pre id="out">Click a button to see the JSON response from the Bantu backend.</pre>
+    </div>
+
+    <div class="card">
+      <h2>What this replaces</h2>
+      <p class="sub">The original Splannes app was a Next.js fullstack project. modifiedS
+      rewrites <strong>only the backend</strong> — every Next.js route handler under
+      <code>/app/api/**</code> becomes a Sua route registered in <code>routes.b</code>.</p>
+
+      <ul>
+        <li><code>app/api/auth/{register,login,me}/route.ts</code> → <code>auth.b</code></li>
+        <li><code>app/api/roadmaps/.../route.ts</code> → <code>roadmaps.b</code></li>
+        <li><code>app/api/progress/.../route.ts</code> → <code>progress.b</code></li>
+        <li><code>app/api/notes/.../route.ts</code> → <code>notes.b</code></li>
+        <li><code>app/api/ai/{tutor,quiz}/route.ts</code> → <code>ai.b</code> (rule-based, no API key)</li>
+        <li><code>prisma/schema.prisma</code> → <code>initDb()</code> in <code>db.b</code></li>
+        <li><code>prisma/seed.ts</code> → <code>seed.b</code> (56 roadmaps)</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>Run it</h2>
+      <pre>bantu run server.b
+# → http://localhost:3000</pre>
+    </div>
+  </div>
+
+  <script>
+    async function testApi() {
+      const out = document.getElementById('out');
+      out.textContent = 'Loading...';
+      try {
+        const r = await fetch('/api/health');
+        const j = await r.json();
+        out.textContent = JSON.stringify(j, null, 2);
+      } catch (e) {
+        out.textContent = 'Error: ' + e.message;
+      }
+    }
+    async function loadRoadmaps() {
+      const out = document.getElementById('out');
+      out.textContent = 'Loading...';
+      try {
+        const r = await fetch('/api/roadmaps');
+        const j = await r.json();
+        out.textContent = JSON.stringify({ count: j.roadmaps.length, first: j.roadmaps[0], last: j.roadmaps[j.roadmaps.length - 1] }, null, 2);
+      } catch (e) {
+        out.textContent = 'Error: ' + e.message;
+      }
+    }
+  </script>
+</body>
+</html>

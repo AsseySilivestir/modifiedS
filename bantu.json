@@ -1,0 +1,8 @@
+{
+  "name": "modifiedS",
+  "version": "1.0.0",
+  "description": "Bantu + Sua rewrite of the Splannes (Next.js) learning platform backend",
+  "entry": "server.b",
+  "dependencies": {},
+  "bantuVersion": "1.2.2"
+}
