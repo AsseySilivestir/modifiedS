@@ -27,7 +27,22 @@
 $sqlite = sua.sqlite;
 
 def initDb() {
-    $sqlite.open("modifiedS.db");
+    // Pick a DB path:
+    //   1. $DB_PATH env var (explicit — used by Render)
+    //   2. /data/modifiedS.db  (Render persistent disk mount)
+    //   3. ./modifiedS.db      (local dev fallback)
+    $dbPath = "modifiedS.db";
+    $envPath = env("DB_PATH");
+    if ($envPath != null && $envPath != "") {
+        $dbPath = $envPath;
+    } else {
+        $probe = sua.sqlite.open("/data/modifiedS.db");
+        if ($probe.connected) {
+            $dbPath = "/data/modifiedS.db";
+        }
+    }
+    print("[db] opening SQLite at: " + $dbPath);
+    $sqlite.open($dbPath);
 
     $sqlite.exec("CREATE TABLE IF NOT EXISTS users ("
         + "id INTEGER PRIMARY KEY AUTOINCREMENT, "

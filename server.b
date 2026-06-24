@@ -43,10 +43,14 @@ routes.registerAll(sua);
 // 5. Serve the frontend from ./public
 sua.server.static("./public");
 
-// 6. Boot
+// 6. Boot — read $PORT from env (Render injects it), default to 3000 locally
 $port = 3000;
+$envPort = env("PORT");
+if ($envPort != null && $envPort != "") {
+    $port = floor(num($envPort));
+}
 print("");
-print("[server] modifiedS listening on http://localhost:" + $port);
-print("[server] frontend:  http://localhost:" + $port + "/");
-print("[server] api root:  http://localhost:" + $port + "/api/health");
+print("[server] modifiedS listening on http://0.0.0.0:" + $port);
+print("[server] frontend:  http://0.0.0.0:" + $port + "/");
+print("[server] api root:  http://0.0.0.0:" + $port + "/api/health");
 sua.server.listen($port);

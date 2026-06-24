@@ -1,0 +1,35 @@
+# Render Blueprint for modifiedS
+# Docs: https://render.com/docs/blueprint-spec
+#
+# After pushing this repo to GitHub:
+#   1. Go to https://dashboard.render.com/blueprints
+#   2. New Blueprint → pick this repo
+#   3. Render will read this file and create the service for you.
+#
+# Or use the Render CLI:
+#   render blueprints apply
+#
+# What this blueprint creates:
+#   • 1 Web Service (Docker runtime, free tier)
+#   • 1 persistent Disk (1 GB) mounted at /data for SQLite
+services:
+  - type: web
+    name: modifiedS
+    runtime: docker
+    plan: free
+    region: ohio            # change to frankfurt / singapore / oregon as needed
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: PORT
+        value: 8080
+      - key: DB_PATH
+        value: /data/modifiedS.db
+      - key: NODE_ENV
+        value: production
+    disk:
+      name: modifiedS-data
+      mountPath: /data
+      sizeGB: 1

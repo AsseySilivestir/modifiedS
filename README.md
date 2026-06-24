@@ -45,7 +45,7 @@ The HTTP API contract is preserved, so the original Splannes frontend (if you st
 
 ```
 modifiedS/
-├── server.b        # Entry point — includes all modules + boots Sua on :3000
+├── server.b        # Entry point — includes all modules + boots Sua on :3000 (or $PORT)
 ├── db.b            # SQLite schema + helpers (users, roadmaps, topics, items, progress, notes, chat)
 ├── seed.b          # Seeds 56 roadmaps on first run (Frontend, Backend, Python, Math Form 1-4 TZ, English, Physics, …)
 ├── auth.b          # POST /api/auth/register, /api/auth/login · GET /api/auth/me · requireUser middleware
@@ -57,6 +57,9 @@ modifiedS/
 ├── public/
 │   └── index.html  # Minimal smoke-test frontend
 ├── bantu.json      # Project manifest
+├── Dockerfile      # Ubuntu 22.04 + prebuilt Bantu v1.2.2 binary → runs on Render
+├── dockerignore    # Keeps the image lean (no .git, *.db, docs)
+├── render.yaml     # Render Blueprint — web service + 1 GB persistent disk
 ├── LICENSE         # MIT
 └── .gitignore
 ```
@@ -109,6 +112,54 @@ bantu run server.b
 ```
 
 On first boot, `seedRoadmaps()` populates 56 roadmaps (Tanzanian O-Level academics + dev skills). The DB file `modifiedS.db` is created next to `server.b` and is `.gitignore`d.
+
+### Run with Docker
+
+```bash
+docker build -t modifieds .
+docker run -p 8080:8080 -v modifieds-data:/data modifieds
+# → http://localhost:8080
+```
+
+The image is `ubuntu:22.04` + the prebuilt Bantu v1.2.2 linux-x64 binary (~660 KB). It reads `$PORT` (default 8080) and writes SQLite to `$DB_PATH` (default `/data/modifiedS.db`).
+
+---
+
+## Deploy on Render
+
+This repo ships with a `Dockerfile` and a `render.yaml` blueprint, so deploying to Render is a 2-click operation.
+
+### Option A — Blueprint (recommended)
+
+1. Push this repo to GitHub (see `PUSH_GUIDE.md`).
+2. Go to <https://dashboard.render.com/blueprints>.
+3. **New Blueprint Instance** → select your `modifiedS` repo.
+4. Render reads `render.yaml` and creates:
+   - A **web service** named `modifiedS` (Docker runtime, free tier)
+   - A **1 GB persistent disk** mounted at `/data` for SQLite
+5. Click **Apply**. Render builds the image and boots. The first deploy takes ~3–5 minutes (mostly apt-get).
+6. When the deploy is live, hit `https://<your-service>.onrender.com/api/health`:
+   ```json
+   {"ok":true,"service":"modifiedS","version":"1.0.0","backend":"bantu-v1.2.2","runtime":"sua-http"}
+   ```
+
+### Option B — Manual web service
+
+1. **New +** → **Web Service** → pick the `modifiedS` repo.
+2. Runtime: **Docker**.
+3. Region: any (defaults to Oregon).
+4. Instance type: **Free** (or upgrade for always-on).
+5. Add a **Disk**: mount path `/data`, size 1 GB.
+6. Environment variables (auto-set by `render.yaml` if you use the blueprint):
+   | Key       | Value                  |
+   |-----------|------------------------|
+   | `PORT`    | `8080`                 |
+   | `DB_PATH` | `/data/modifiedS.db`   |
+7. **Create Web Service**. Render builds and deploys.
+
+### Why a persistent disk?
+
+Render's free web services have an ephemeral filesystem — every deploy wipes the container. Mounting a disk at `/data` keeps `modifiedS.db` (users, roadmaps, progress, notes) across deploys and restarts. `db.b` automatically probes `/data/modifiedS.db` and uses it when available; if not, it falls back to `./modifiedS.db` (useful for local Docker runs without a volume).
 
 ---
 

@@ -1,0 +1,31 @@
+# VCS / metadata
+.git
+.gitignore
+.github
+
+# Local dev artifacts
+*.db
+*.db-journal
+*.sqlite
+*.sqlite-journal
+node_modules/
+.next/
+dist/
+build/
+
+# Editor / OS junk
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.log
+.bantu-cache/
+
+# Docs / scripts that don't belong in the image
+README.md
+PUSH_GUIDE.md
+LICENSE
+push.sh
+Dockerfile
+.dockerignore
+render.yaml
