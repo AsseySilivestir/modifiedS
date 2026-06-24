@@ -196,6 +196,36 @@ const api = {
   // AI
   tutor:           (msg)     => api.req('/ai/tutor', { method: 'POST', body: { message: msg } }),
   quiz:            (topic, count) => api.req('/ai/quiz', { method: 'POST', body: { topic, count } }),
+
+  // Community — thoughts
+  thoughts:        ()        => api.req('/thoughts'),
+  postThought:     (b)       => api.req('/thoughts', { method: 'POST', auth: true, body: b }),
+  deleteThought:   (id)      => api.req('/thoughts/' + id, { method: 'DELETE', auth: true }),
+  likeThought:     (id)      => api.req('/thoughts/' + id + '/like', { method: 'POST', auth: true }),
+
+  // Announcements
+  announcements:   ()        => api.req('/announcements'),
+  createAnnouncement: (b)    => api.req('/announcements', { method: 'POST', auth: true, body: b }),
+  deleteAnnouncement: (id)   => api.req('/announcements/' + id, { method: 'DELETE', auth: true }),
+
+  // Courses
+  courses:         ()        => api.req('/courses'),
+  course:          (id)      => api.req('/courses/' + id),
+  createCourse:    (b)       => api.req('/courses', { method: 'POST', auth: true, body: b }),
+  updateCourse:    (id, b)   => api.req('/courses/' + id, { method: 'PUT', auth: true, body: b }),
+  deleteCourse:    (id)      => api.req('/courses/' + id, { method: 'DELETE', auth: true }),
+  courseModules:   (id)      => api.req('/courses/' + id + '/modules'),
+  addCourseModule: (id, b)   => api.req('/courses/' + id + '/modules', { method: 'POST', auth: true, body: b }),
+  removeCourseModule: (cid, mid) => api.req('/courses/' + cid + '/modules/' + mid, { method: 'DELETE', auth: true }),
+
+  // Enrollments
+  enrollments:     ()              => api.req('/enrollments', { auth: true }),
+  enroll:          (cid)           => api.req('/enrollments/' + cid, { method: 'POST', auth: true }),
+  unenroll:        (cid)           => api.req('/enrollments/' + cid, { method: 'DELETE', auth: true }),
+  setProgress:     (cid, percent)  => api.req('/enrollments/' + cid + '/progress', { method: 'POST', auth: true, body: { percent } }),
+
+  // Certificates
+  certificates:    ()        => api.req('/certificates', { auth: true }),
 };
 
 /* ─── 3. Auth ──────────────────────────────────────────────────────── */
@@ -261,6 +291,13 @@ const routes = [
   { path: /^\/tutor\/?$/,           view: viewTutor },
   { path: /^\/progress\/?$/,        view: viewProgress },
   { path: /^\/profile\/?$/,         view: viewProfile },
+  // New in v1.1 — admin panel + community + courses + certificates
+  { path: /^\/courses\/?$/,                  view: viewCourses },
+  { path: /^\/course\/(\d+)\/?$/,             view: viewCourseDetail },
+  { path: /^\/community\/?$/,                 view: viewCommunity },
+  { path: /^\/announcements\/?$/,             view: viewAnnouncements },
+  { path: /^\/certificates\/?$/,              view: viewCertificates },
+  { path: /^\/admin\/?$/,                     view: viewAdmin },
 ];
 
 function currentPath() {
@@ -1236,6 +1273,599 @@ async function viewProfile(root) {
   root.appendChild(logoutCard);
 }
 
+/* ── v1.1 views: Courses / Course detail / Community / Announcements / Certificates / Admin ── */
+
+async function viewCourses(root) {
+  root.classList.add('view-courses');
+  let data;
+  try {
+    data = await api.courses();
+  } catch (e) { root.innerHTML = ''; root.appendChild(viewError(e)); return; }
+  const courses = data.courses || [];
+
+  root.appendChild(el('div', { class: 'page-head' },
+    el('h1', {}, 'Courses'),
+    el('p', {}, 'Browse courses published by the modifiedS team. Enroll, track your progress, and earn a certificate on completion.'),
+  ));
+
+  if (state.user && state.user.role === 'admin') {
+    root.appendChild(el('a', { class: 'btn', href: '#/admin' }, '+ Manage courses (Admin)'));
+  }
+
+  if (courses.length === 0) {
+    root.appendChild(el('div', { class: 'empty' },
+      el('div', { class: 'empty-icon' }, '🎓'),
+      el('h3', {}, 'No courses yet'),
+      el('p', {}, state.user && state.user.role === 'admin'
+        ? 'Head to the Admin panel to publish your first course.'
+        : 'Check back soon — new courses are on the way.'),
+    ));
+    return;
+  }
+
+  const grid = el('div', { class: 'course-grid' });
+  for (const c of courses) {
+    const color = c.thumbnail_color || '#6366f1';
+    grid.appendChild(el('a', { class: 'course-card', href: '#/course/' + c.id },
+      el('div', { class: 'course-thumb', style: 'background:' + color },
+        el('span', { class: 'course-thumb-emoji' }, '📘'),
+      ),
+      el('div', { class: 'course-body' },
+        el('div', { class: 'course-tags' },
+          el('span', { class: 'pill pill-' + diffColor(c.difficulty) }, c.difficulty || 'beginner'),
+          el('span', { class: 'pill' }, c.category || 'General'),
+        ),
+        el('h3', {}, c.title),
+        el('p', { class: 'course-desc' }, c.description || ''),
+        el('div', { class: 'course-meta' },
+          el('span', {}, '⏱ ' + (c.duration_hours || 0) + 'h'),
+          el('span', {}, '👤 ' + escapeHtml(c.author || 'modifiedS')),
+        ),
+      ),
+    ));
+  }
+  root.appendChild(grid);
+}
+
+async function viewCourseDetail(root, courseId) {
+  root.classList.add('view-course-detail');
+  let data;
+  try {
+    data = await api.course(courseId);
+  } catch (e) { root.innerHTML = ''; root.appendChild(viewError(e)); return; }
+  const c = data.course;
+  const modules = data.modules || [];
+
+  root.appendChild(el('a', { class: 'back-link', href: '#/courses' }, '← Back to courses'));
+  const color = c.thumbnail_color || '#6366f1';
+
+  root.appendChild(el('div', { class: 'course-hero', style: '--accent:' + color },
+    el('div', { class: 'course-hero-tags' },
+      el('span', { class: 'pill pill-' + diffColor(c.difficulty) }, c.difficulty || 'beginner'),
+      el('span', { class: 'pill' }, c.category || 'General'),
+    ),
+    el('h1', {}, c.title),
+    el('p', { class: 'course-hero-desc' }, c.description || ''),
+    el('div', { class: 'course-hero-meta' },
+      el('span', {}, '⏱ ' + (c.duration_hours || 0) + ' hours'),
+      el('span', {}, '👤 ' + escapeHtml(c.instructor || c.author || 'modifiedS')),
+      el('span', {}, '📦 ' + modules.length + ' module' + (modules.length === 1 ? '' : 's')),
+    ),
+  ));
+
+  // Enrollment + progress
+  let enrollment = null;
+  if (state.token) {
+    try {
+      const en = await api.enrollments();
+      enrollment = (en.enrollments || []).find(e => String(e.course_id) === String(courseId));
+    } catch (_) {}
+  }
+
+  const actionsBar = el('div', { class: 'course-actions' });
+  if (!state.token) {
+    actionsBar.appendChild(el('a', { class: 'btn', href: '#/login' }, 'Login to enroll'));
+  } else if (!enrollment) {
+    const btn = el('button', { class: 'btn', onclick: async () => {
+      try { await api.enroll(courseId); toast('Enrolled! Good luck 🎯'); router(); }
+      catch (e) { toast(e.message, 'error'); }
+    }}, 'Enroll now');
+    actionsBar.appendChild(btn);
+  } else {
+    const pct = enrollment.progress_percent || 0;
+    actionsBar.appendChild(el('div', { class: 'progress-inline' },
+      el('div', { class: 'progress-bar' },
+        el('div', { class: 'progress-bar-fill', style: 'width:' + pct + '%' }),
+      ),
+      el('span', { class: 'progress-pct' }, pct + '%'),
+    ));
+    if (pct < 100) {
+      const pctInput = el('input', { type: 'range', min: '0', max: '100', value: String(pct), style: 'width:220px' });
+      pctInput.addEventListener('change', async () => {
+        try {
+          const r = await api.setProgress(courseId, parseInt(pctInput.value, 10));
+          toast('Progress saved: ' + pctInput.value + '%');
+          if (r.certificate) {
+            toast('🎉 Course complete! Your certificate is ready.', 'success');
+          }
+          router();
+        } catch (e) { toast(e.message, 'error'); }
+      });
+      actionsBar.appendChild(pctInput);
+      actionsBar.appendChild(el('span', { class: 'muted' }, 'Mark my progress'));
+    } else {
+      actionsBar.appendChild(el('span', { class: 'pill pill-success' }, '✓ Completed'));
+      actionsBar.appendChild(el('a', { class: 'btn btn-ghost', href: '#/certificates' }, 'View certificate →'));
+    }
+    const unenrollBtn = el('button', { class: 'btn btn-ghost btn-sm', onclick: async () => {
+      if (!confirm('Unenroll from this course? Your progress will be lost.')) return;
+      try { await api.unenroll(courseId); toast('Unenrolled'); router(); }
+      catch (e) { toast(e.message, 'error'); }
+    }}, 'Unenroll');
+    actionsBar.appendChild(unenrollBtn);
+  }
+  root.appendChild(actionsBar);
+
+  // Modules
+  root.appendChild(el('h2', { class: 'section-title' }, 'Course content'));
+  if (modules.length === 0) {
+    root.appendChild(el('div', { class: 'empty' },
+      el('p', {}, 'No modules yet. Check back soon.'),
+    ));
+  } else {
+    const list = el('div', { class: 'module-list' });
+    modules.forEach((m, i) => {
+      list.appendChild(el('details', { class: 'module-item' },
+        el('summary', {},
+          el('span', { class: 'module-num' }, String(i + 1).padStart(2, '0')),
+          el('span', { class: 'module-title' }, m.title),
+        ),
+        el('div', { class: 'module-content', html: renderMarkdown(m.content || '') }),
+      ));
+    });
+    root.appendChild(list);
+  }
+}
+
+async function viewCommunity(root) {
+  root.classList.add('view-community');
+  let data;
+  try {
+    data = await api.thoughts();
+  } catch (e) { root.innerHTML = ''; root.appendChild(viewError(e)); return; }
+  const thoughts = data.thoughts || [];
+
+  root.appendChild(el('div', { class: 'page-head' },
+    el('h1', {}, 'Community'),
+    el('p', {}, 'Share what you are learning, ask questions, and inspire each other.'),
+  ));
+
+  // Composer
+  if (state.token) {
+    const ta = el('textarea', { class: 'thought-input', placeholder: 'Share a thought, aha-moment, or question… (max 1000 chars)', maxlength: '1000', rows: '3' });
+    const tagInput = el('input', { class: 'thought-tags', placeholder: 'Tags (comma-separated, optional)' });
+    const postBtn = el('button', { class: 'btn', onclick: async () => {
+      const body = ta.value.trim();
+      if (!body) { toast('Write something first ✍️', 'error'); return; }
+      postBtn.disabled = true;
+      postBtn.textContent = 'Posting…';
+      try {
+        await api.postThought({ body, tags: tagInput.value.trim() });
+        ta.value = ''; tagInput.value = '';
+        toast('Posted 🎉');
+        router();
+      } catch (e) { toast(e.message, 'error'); }
+      finally { postBtn.disabled = false; postBtn.textContent = 'Post thought'; }
+    }}, 'Post thought');
+    root.appendChild(el('div', { class: 'thought-composer' },
+      ta, tagInput, postBtn));
+  } else {
+    root.appendChild(el('div', { class: 'banner' },
+      el('a', { href: '#/login' }, 'Login'), ' to share your thoughts.'));
+  }
+
+  // Feed
+  if (thoughts.length === 0) {
+    root.appendChild(el('div', { class: 'empty' },
+      el('div', { class: 'empty-icon' }, '💬'),
+      el('h3', {}, 'No thoughts yet'),
+      el('p', {}, 'Be the first to share something with the community.'),
+    ));
+    return;
+  }
+
+  const feed = el('div', { class: 'thought-feed' });
+  for (const t of thoughts) {
+    const displayName = t.display_name || t.username || 'Anonymous';
+    const avatar = el('div', { class: 'avatar avatar-sm' }, initials(displayName));
+    const card = el('div', { class: 'thought-card' },
+      el('div', { class: 'thought-head' },
+        avatar,
+        el('div', { class: 'thought-meta' },
+          el('span', { class: 'thought-author' }, displayName),
+          el('span', { class: 'thought-time' }, timeAgo(t.created_at)),
+        ),
+      ),
+      el('p', { class: 'thought-body' }, t.body),
+    );
+    if (t.tags && t.tags !== '') {
+      card.appendChild(el('div', { class: 'thought-tags-row' },
+        t.tags.split(',').map(s => s.trim()).filter(Boolean).map(tag =>
+          el('span', { class: 'pill pill-soft' }, '#' + tag))));
+    }
+    const footer = el('div', { class: 'thought-foot' });
+    if (state.token) {
+      const likeBtn = el('button', { class: 'btn btn-ghost btn-sm', onclick: async () => {
+        likeBtn.disabled = true;
+        try { await api.likeThought(t.id); router(); }
+        catch (e) { toast(e.message, 'error'); }
+        finally { likeBtn.disabled = false; }
+      }}, '❤ ' + (t.likes || 0));
+      footer.appendChild(likeBtn);
+    } else {
+      footer.appendChild(el('span', { class: 'muted' }, '❤ ' + (t.likes || 0) + ' likes'));
+    }
+    if (state.user && (state.user.id === t.user_id || state.user.role === 'admin')) {
+      footer.appendChild(el('button', { class: 'btn btn-ghost btn-sm', onclick: async () => {
+        if (!confirm('Delete this thought?')) return;
+        try { await api.deleteThought(t.id); toast('Deleted'); router(); }
+        catch (e) { toast(e.message, 'error'); }
+      }}, 'Delete'));
+    }
+    card.appendChild(footer);
+    feed.appendChild(card);
+  }
+  root.appendChild(feed);
+}
+
+async function viewAnnouncements(root) {
+  root.classList.add('view-announcements');
+  let data;
+  try {
+    data = await api.announcements();
+  } catch (e) { root.innerHTML = ''; root.appendChild(viewError(e)); return; }
+  const items = data.announcements || [];
+
+  root.appendChild(el('div', { class: 'page-head' },
+    el('h1', {}, 'Announcements'),
+    el('p', {}, 'Latest news from the modifiedS team.'),
+  ));
+
+  if (items.length === 0) {
+    root.appendChild(el('div', { class: 'empty' },
+      el('div', { class: 'empty-icon' }, '📢'),
+      el('h3', {}, 'No announcements'),
+      el('p', {}, 'Stay tuned — official updates will appear here.'),
+    ));
+    return;
+  }
+
+  const list = el('div', { class: 'announcement-list' });
+  for (const a of items) {
+    const card = el('div', { class: 'announcement-card' + (a.pinned ? ' pinned' : '') },
+      el('div', { class: 'announcement-head' },
+        el('span', { class: 'pill pill-' + (a.pinned ? 'success' : 'soft') }, a.pinned ? '📌 Pinned' : (a.category || 'general')),
+        el('span', { class: 'announcement-time' }, timeAgo(a.created_at)),
+      ),
+      el('h3', {}, a.title),
+      el('div', { class: 'announcement-body', html: renderMarkdown(a.body) }),
+      el('div', { class: 'announcement-author' }, '— ' + escapeHtml(a.author || 'modifiedS')),
+    );
+    if (state.user && state.user.role === 'admin') {
+      card.appendChild(el('button', { class: 'btn btn-ghost btn-sm', onclick: async () => {
+        if (!confirm('Delete this announcement?')) return;
+        try { await api.deleteAnnouncement(a.id); toast('Deleted'); router(); }
+        catch (e) { toast(e.message, 'error'); }
+      }}, 'Delete'));
+    }
+    list.appendChild(card);
+  }
+  root.appendChild(list);
+}
+
+async function viewCertificates(root) {
+  root.classList.add('view-certificates');
+  if (!requireAuth()) return;
+
+  let data;
+  try {
+    data = await api.certificates();
+  } catch (e) { root.innerHTML = ''; root.appendChild(viewError(e)); return; }
+  const certs = data.certificates || [];
+
+  root.appendChild(el('div', { class: 'page-head' },
+    el('h1', {}, 'My Certificates'),
+    el('p', {}, 'Every time you complete a course (100% progress), a certificate is automatically issued. Click to view and print or save as PDF.'),
+  ));
+
+  if (certs.length === 0) {
+    root.appendChild(el('div', { class: 'empty' },
+      el('div', { class: 'empty-icon' }, '🏅'),
+      el('h3', {}, 'No certificates yet'),
+      el('p', {}, 'Enroll in a course and mark your progress to 100% to earn your first certificate.'),
+      el('a', { class: 'btn', href: '#/courses' }, 'Browse courses'),
+    ));
+    return;
+  }
+
+  const grid = el('div', { class: 'cert-grid' });
+  for (const ct of certs) {
+    grid.appendChild(el('div', { class: 'cert-card' },
+      el('div', { class: 'cert-seal' }, '★'),
+      el('h3', {}, ct.course_title || 'Course'),
+      el('div', { class: 'cert-code' }, 'Code: ' + ct.certificate_code),
+      el('div', { class: 'cert-issued' }, 'Issued ' + timeAgo(ct.issued_at)),
+      el('div', { class: 'cert-actions' },
+        el('button', { class: 'btn btn-sm', onclick: () => openCertificatePrintWindow(ct) }, 'View / Print'),
+        el('button', { class: 'btn btn-ghost btn-sm', onclick: () => openCertificatePrintWindow(ct) }, 'Download PDF'),
+      ),
+    ));
+  }
+  root.appendChild(grid);
+}
+
+/** Opens a new window with a printable certificate HTML and triggers print dialog.
+ *  User can choose "Save as PDF" in the print dialog to download. */
+function openCertificatePrintWindow(ct) {
+  const displayName = ct.display_name || ct.username || 'Learner';
+  const courseTitle = ct.course_title || 'Course';
+  const instructor  = ct.instructor || 'modifiedS Academy';
+  const issuedAt    = (ct.issued_at || '').replace('T', ' ').replace('Z', '');
+  const duration    = ct.duration_hours || 0;
+  const code        = ct.certificate_code || '';
+  const w = window.open('', '_blank', 'width=920,height=720');
+  if (!w) { toast('Popup blocked — please allow popups for this site.', 'error'); return; }
+  w.document.open();
+  w.document.write(`<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Certificate — ${escapeHtml(courseTitle)}</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Georgia', 'Times New Roman', serif; background: #f5f5f7; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; }
+  .cert { background: #fff; max-width: 920px; width: 100%; padding: 64px 56px; border: 12px double #6366f1; position: relative; box-shadow: 0 12px 40px rgba(99,102,241,0.15); }
+  .cert::before, .cert::after { content: ''; position: absolute; left: 12px; right: 12px; height: 1px; background: linear-gradient(90deg, transparent, #c7d2fe, transparent); }
+  .cert::before { top: 12px; } .cert::after { bottom: 12px; }
+  .ribbon { text-align: center; font-size: 12px; letter-spacing: 4px; text-transform: uppercase; color: #6366f1; font-weight: 600; margin-bottom: 16px; }
+  h1 { text-align: center; font-size: 38px; color: #1f2937; margin-bottom: 8px; font-weight: 400; letter-spacing: 1px; }
+  .subtitle { text-align: center; font-size: 16px; color: #6b7280; margin-bottom: 48px; font-style: italic; }
+  .name { text-align: center; font-size: 42px; color: #4f46e5; font-weight: 700; margin-bottom: 32px; padding-bottom: 16px; border-bottom: 2px solid #e0e7ff; }
+  .desc { text-align: center; font-size: 16px; color: #4b5563; line-height: 1.7; margin-bottom: 16px; }
+  .course-name { font-weight: 700; color: #1f2937; font-size: 22px; display: block; margin-top: 8px; }
+  .meta { display: flex; justify-content: space-between; margin-top: 56px; padding-top: 32px; border-top: 1px solid #e5e7eb; }
+  .meta-item { text-align: center; flex: 1; }
+  .meta-label { font-size: 11px; letter-spacing: 2px; text-transform: uppercase; color: #9ca3af; margin-bottom: 6px; }
+  .meta-value { font-size: 14px; color: #1f2937; font-weight: 600; word-break: break-all; }
+  .seal { position: absolute; bottom: 40px; right: 40px; width: 96px; height: 96px; border: 3px solid #6366f1; border-radius: 50%; display: flex; flex-direction: column; align-items: center; justify-content: center; color: #6366f1; font-size: 10px; text-align: center; transform: rotate(-8deg); }
+  .seal-star { font-size: 22px; line-height: 1; }
+  .actions { text-align: center; margin-top: 24px; }
+  .print-btn { background: #6366f1; color: #fff; border: none; padding: 12px 24px; font-size: 14px; border-radius: 8px; cursor: pointer; font-family: inherit; }
+  .print-btn:hover { background: #4f46e5; }
+  @media print { body { background: #fff; padding: 0; } .cert { box-shadow: none; max-width: 100%; } .actions { display: none; } }
+</style></head><body>
+<div class="cert">
+  <div class="ribbon">modifiedS Academy</div>
+  <h1>Certificate of Completion</h1>
+  <p class="subtitle">This certificate is proudly presented to</p>
+  <div class="name">${escapeHtml(displayName)}</div>
+  <p class="desc">For successfully completing all required modules and demonstrating proficiency in</p>
+  <p class="desc"><span class="course-name">${escapeHtml(courseTitle)}</span></p>
+  <p class="desc">A ${escapeHtml(String(duration))}-hour course instructed by ${escapeHtml(instructor)}.</p>
+  <div class="meta">
+    <div class="meta-item"><div class="meta-label">Date Issued</div><div class="meta-value">${escapeHtml(issuedAt)}</div></div>
+    <div class="meta-item"><div class="meta-label">Certificate Code</div><div class="meta-value">${escapeHtml(code)}</div></div>
+    <div class="meta-item"><div class="meta-label">Verify At</div><div class="meta-value">modifiedS.app</div></div>
+  </div>
+  <div class="seal"><div class="seal-star">&#9733;</div><div>OFFICIAL<br/>SEAL</div></div>
+</div>
+<div class="actions"><button class="print-btn" onclick="window.print()">Print / Save as PDF</button></div>
+<script>window.onload = function() { setTimeout(function(){ window.print(); }, 400); };<\/script>
+</body></html>`);
+  w.document.close();
+}
+
+async function viewAdmin(root) {
+  root.classList.add('view-admin');
+  if (!requireAuth()) return;
+  if (!state.user || state.user.role !== 'admin') {
+    root.innerHTML = '';
+    root.appendChild(el('div', { class: 'empty' },
+      el('div', { class: 'empty-icon' }, '🚫'),
+      el('h3', {}, 'Admin access required'),
+      el('p', {}, 'Only the first registered account (or promoted admins) can access this panel.'),
+    ));
+    return;
+  }
+
+  root.appendChild(el('div', { class: 'page-head' },
+    el('h1', {}, 'Admin Panel'),
+    el('p', {}, 'Publish courses, post announcements, and manage the community. The first user to register is automatically an admin.'),
+  ));
+
+  // Tab bar
+  const tabs = [
+    { id: 'courses', label: 'Courses' },
+    { id: 'announcements', label: 'Announcements' },
+    { id: 'stats', label: 'Stats' },
+  ];
+  const tabBar = el('div', { class: 'tab-bar' });
+  const panel = el('div', { class: 'tab-panel' });
+  let active = 'courses';
+
+  function renderTab() {
+    tabBar.innerHTML = '';
+    for (const t of tabs) {
+      const b = el('button', { class: 'tab-btn' + (active === t.id ? ' active' : ''), onclick: () => {
+        active = t.id; renderTab();
+      }}, t.label);
+      tabBar.appendChild(b);
+    }
+    panel.innerHTML = '';
+    if (active === 'courses') panel.appendChild(renderCoursesAdmin());
+    else if (active === 'announcements') panel.appendChild(renderAnnouncementsAdmin());
+    else if (active === 'stats') panel.appendChild(renderStatsAdmin());
+  }
+
+  function renderCoursesAdmin() {
+    const wrap = el('div', { class: 'admin-section' });
+    wrap.appendChild(el('h2', {}, 'Publish a new course'));
+    const f = el('form', { class: 'admin-form' });
+    const title = el('input', { type: 'text', placeholder: 'Course title', required: '' });
+    const description = el('textarea', { placeholder: 'Short description (what learners will be able to do after this course)', rows: '3', required: '' });
+    const category = el('input', { type: 'text', placeholder: 'Category (e.g. Web, Data, Design)', value: 'General' });
+    const difficulty = el('select', {},
+      el('option', { value: 'beginner' }, 'beginner'),
+      el('option', { value: 'intermediate' }, 'intermediate'),
+      el('option', { value: 'advanced' }, 'advanced'));
+    const duration = el('input', { type: 'number', min: '0', placeholder: 'Duration (hours)', value: '10' });
+    const instructor = el('input', { type: 'text', placeholder: 'Instructor name', value: state.user.username || '' });
+    const color = el('input', { type: 'color', value: '#6366f1' });
+    const submit = el('button', { class: 'btn', type: 'submit' }, 'Publish course');
+    f.append(
+      field('Title', title),
+      field('Description', description),
+      el('div', { class: 'form-row' }, field('Category', category), field('Difficulty', difficulty)),
+      el('div', { class: 'form-row' }, field('Duration (hours)', duration), field('Instructor', instructor), field('Color', color)),
+      submit);
+    f.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      submit.disabled = true; submit.textContent = 'Publishing…';
+      try {
+        await api.createCourse({
+          title: title.value.trim(),
+          description: description.value.trim(),
+          category: category.value.trim() || 'General',
+          difficulty: difficulty.value,
+          duration_hours: parseInt(duration.value, 10) || 0,
+          instructor: instructor.value.trim(),
+          thumbnail_color: color.value,
+        });
+        toast('Course published 🎉');
+        f.reset();
+        renderTab();
+      } catch (err) { toast(err.message, 'error'); }
+      finally { submit.disabled = false; submit.textContent = 'Publish course'; }
+    });
+    wrap.appendChild(f);
+
+    wrap.appendChild(el('h3', { class: 'mt-l' }, 'Manage existing courses'));
+    api.courses().then(d => {
+      const list = el('div', { class: 'admin-list' });
+      (d.courses || []).forEach(c => {
+        const row = el('div', { class: 'admin-row' },
+          el('div', { class: 'admin-row-main' },
+            el('strong', {}, c.title),
+            el('span', { class: 'muted' }, ' · ' + c.category + ' · ' + c.difficulty + ' · ' + c.duration_hours + 'h'),
+          ),
+          el('a', { class: 'btn btn-ghost btn-sm', href: '#/course/' + c.id }, 'View'),
+        );
+        const del = el('button', { class: 'btn btn-ghost btn-sm', onclick: async () => {
+          if (!confirm('Delete course "' + c.title + '"? This also removes its modules and enrollments.')) return;
+          try { await api.deleteCourse(c.id); toast('Deleted'); renderTab(); }
+          catch (e) { toast(e.message, 'error'); }
+        }}, 'Delete');
+        row.appendChild(del);
+        list.appendChild(row);
+      });
+      if ((d.courses || []).length === 0) list.appendChild(el('p', { class: 'muted' }, 'No courses published yet.'));
+      wrap.appendChild(list);
+    }).catch(e => wrap.appendChild(viewError(e)));
+    return wrap;
+  }
+
+  function renderAnnouncementsAdmin() {
+    const wrap = el('div', { class: 'admin-section' });
+    wrap.appendChild(el('h2', {}, 'Post a new announcement'));
+    const f = el('form', { class: 'admin-form' });
+    const title = el('input', { type: 'text', placeholder: 'Headline', required: '' });
+    const body = el('textarea', { placeholder: 'Announcement body (markdown supported)', rows: '4', required: '' });
+    const category = el('input', { type: 'text', placeholder: 'Category', value: 'general' });
+    const pinned = el('input', { type: 'checkbox' });
+    const submit = el('button', { class: 'btn', type: 'submit' }, 'Post announcement');
+    f.append(
+      field('Title', title),
+      field('Body', body),
+      el('div', { class: 'form-row' }, field('Category', category), el('label', { class: 'field' }, el('span', { class: 'field-label' }, 'Pinned'), el('span', { class: 'checkbox-row' }, pinned, el('span', {}, 'Pin to top')))),
+      submit);
+    f.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      submit.disabled = true; submit.textContent = 'Posting…';
+      try {
+        await api.createAnnouncement({
+          title: title.value.trim(),
+          body: body.value.trim(),
+          category: category.value.trim() || 'general',
+          pinned: pinned.checked,
+        });
+        toast('Announcement posted 📢');
+        f.reset();
+      } catch (err) { toast(err.message, 'error'); }
+      finally { submit.disabled = false; submit.textContent = 'Post announcement'; }
+    });
+    wrap.appendChild(f);
+
+    wrap.appendChild(el('h3', { class: 'mt-l' }, 'Manage announcements'));
+    api.announcements().then(d => {
+      const list = el('div', { class: 'admin-list' });
+      (d.announcements || []).forEach(a => {
+        const row = el('div', { class: 'admin-row' },
+          el('div', { class: 'admin-row-main' },
+            el('strong', {}, (a.pinned ? '📌 ' : '') + a.title),
+            el('span', { class: 'muted' }, ' · ' + (a.category || 'general') + ' · ' + timeAgo(a.created_at)),
+          ),
+          el('button', { class: 'btn btn-ghost btn-sm', onclick: async () => {
+            if (!confirm('Delete announcement?')) return;
+            try { await api.deleteAnnouncement(a.id); toast('Deleted'); renderTab(); }
+            catch (e) { toast(e.message, 'error'); }
+          }}, 'Delete'),
+        );
+        list.appendChild(row);
+      });
+      if ((d.announcements || []).length === 0) list.appendChild(el('p', { class: 'muted' }, 'No announcements yet.'));
+      wrap.appendChild(list);
+    }).catch(e => wrap.appendChild(viewError(e)));
+    return wrap;
+  }
+
+  function renderStatsAdmin() {
+    const wrap = el('div', { class: 'admin-section' });
+    wrap.appendChild(el('h2', {}, 'Platform stats'));
+    wrap.appendChild(el('p', { class: 'muted' }, 'Quick snapshot of activity on your modifiedS instance.'));
+    api.users().then(d => {
+      wrap.appendChild(el('div', { class: 'stat-grid' },
+        statCard('👥', (d.users || []).length, 'Registered users'),
+        statCard('🎓', null, 'Loading courses…'),
+      ));
+      return api.courses();
+    }).then(d => {
+      wrap.appendChild(statCard('🎓', (d.courses || []).length, 'Courses published'));
+      return api.thoughts();
+    }).then(d => {
+      wrap.appendChild(statCard('💬', (d.thoughts || []).length, 'Community thoughts'));
+      return api.announcements();
+    }).then(d => {
+      wrap.appendChild(statCard('📢', (d.announcements || []).length, 'Announcements'));
+    }).catch(e => wrap.appendChild(viewError(e)));
+    return wrap;
+  }
+
+  root.appendChild(tabBar);
+  root.appendChild(panel);
+  renderTab();
+}
+
+function field(label, input) {
+  return el('label', { class: 'field' },
+    el('span', { class: 'field-label' }, label),
+    input);
+}
+
+function statCard(emoji, value, label) {
+  return el('div', { class: 'stat-card' },
+    el('div', { class: 'stat-emoji' }, emoji),
+    el('div', { class: 'stat-value' }, value === null ? '…' : String(value)),
+    el('div', { class: 'stat-label' }, label));
+}
+
 /* ── Login / Register ─────────────────────────────────────────────── */
 
 async function viewLogin(root) {
@@ -1387,6 +2017,12 @@ function renderNavActions() {
   } else {
     wrap.appendChild(el('a', { class: 'btn btn-ghost btn-sm', href: '#/login' }, 'Login'));
     wrap.appendChild(el('a', { class: 'btn btn-sm', href: '#/register' }, 'Sign up'));
+  }
+
+  // Show or hide admin nav link based on role
+  const adminLink = document.getElementById('nav-admin-link');
+  if (adminLink) {
+    adminLink.style.display = (state.user && state.user.role === 'admin') ? '' : 'none';
   }
 }
 

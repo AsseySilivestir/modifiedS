@@ -119,7 +119,83 @@ def initDb() {
         + "body TEXT NOT NULL, "
         + "created_at TEXT DEFAULT CURRENT_TIMESTAMP)");
 
-    print("[db] initialized — 8 tables ready");
+    // ---- Admin / community / courses tables (added in v1.1) ----
+
+    $sqlite.exec("CREATE TABLE IF NOT EXISTS courses ("
+        + "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        + "title TEXT NOT NULL, "
+        + "slug TEXT UNIQUE NOT NULL, "
+        + "description TEXT NOT NULL, "
+        + "category TEXT DEFAULT 'General', "
+        + "difficulty TEXT DEFAULT 'beginner', "
+        + "duration_hours INTEGER DEFAULT 0, "
+        + "instructor TEXT DEFAULT '', "
+        + "thumbnail_color TEXT DEFAULT '#6366f1', "
+        + "created_by INTEGER, "
+        + "created_at TEXT DEFAULT CURRENT_TIMESTAMP, "
+        + "updated_at TEXT DEFAULT CURRENT_TIMESTAMP)");
+
+    $sqlite.exec("CREATE TABLE IF NOT EXISTS course_modules ("
+        + "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        + "course_id INTEGER NOT NULL, "
+        + "title TEXT NOT NULL, "
+        + "content TEXT DEFAULT '', "
+        + "ordinal INTEGER DEFAULT 0, "
+        + "FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE)");
+
+    $sqlite.exec("CREATE TABLE IF NOT EXISTS enrollments ("
+        + "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        + "user_id INTEGER NOT NULL, "
+        + "course_id INTEGER NOT NULL, "
+        + "status TEXT DEFAULT 'enrolled', "
+        + "progress_percent INTEGER DEFAULT 0, "
+        + "enrolled_at TEXT DEFAULT CURRENT_TIMESTAMP, "
+        + "completed_at TEXT, "
+        + "UNIQUE(user_id, course_id))");
+
+    $sqlite.exec("CREATE TABLE IF NOT EXISTS announcements ("
+        + "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        + "title TEXT NOT NULL, "
+        + "body TEXT NOT NULL, "
+        + "category TEXT DEFAULT 'general', "
+        + "pinned INTEGER DEFAULT 0, "
+        + "created_by INTEGER, "
+        + "created_at TEXT DEFAULT CURRENT_TIMESTAMP)");
+
+    $sqlite.exec("CREATE TABLE IF NOT EXISTS thoughts ("
+        + "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        + "user_id INTEGER NOT NULL, "
+        + "body TEXT NOT NULL, "
+        + "tags TEXT DEFAULT '', "
+        + "likes INTEGER DEFAULT 0, "
+        + "created_at TEXT DEFAULT CURRENT_TIMESTAMP)");
+
+    $sqlite.exec("CREATE TABLE IF NOT EXISTS thought_likes ("
+        + "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        + "thought_id INTEGER NOT NULL, "
+        + "user_id INTEGER NOT NULL, "
+        + "created_at TEXT DEFAULT CURRENT_TIMESTAMP, "
+        + "UNIQUE(thought_id, user_id))");
+
+    $sqlite.exec("CREATE TABLE IF NOT EXISTS certificates ("
+        + "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        + "user_id INTEGER NOT NULL, "
+        + "course_id INTEGER NOT NULL, "
+        + "certificate_code TEXT UNIQUE NOT NULL, "
+        + "issued_at TEXT DEFAULT CURRENT_TIMESTAMP, "
+        + "UNIQUE(user_id, course_id))");
+
+    // Promote the very first user to admin (idempotent — only if no admin exists yet)
+    $adminCheck = $sqlite.query("SELECT id FROM users WHERE role = 'admin' LIMIT 1");
+    if ($adminCheck.length == 0) {
+        $firstUser = $sqlite.query("SELECT id, username FROM users ORDER BY id ASC LIMIT 1");
+        if ($firstUser.length > 0) {
+            $sqlite.exec("UPDATE users SET role = 'admin' WHERE id = " + $firstUser[0]["id"]);
+            print("[db] promoted first user '" + $firstUser[0]["username"] + "' to admin");
+        }
+    }
+
+    print("[db] initialized — 14 tables ready (users, roadmaps, topics, items, progress, notes, chat, courses, modules, enrollments, announcements, thoughts, thought_likes, certificates)");
 }
 
 // ---------- Users ----------
@@ -147,9 +223,15 @@ def getUserByName($name) {
 }
 
 def createUser($username, $email, $password) {
-    $sqlite.exec("INSERT INTO users (username, email, password, display_name) VALUES ('"
-        + $username + "', '" + $email + "', '" + $password + "', '" + $username + "')");
-    print("[db] created user: " + $username);
+    // Determine role: first user becomes admin, others are students
+    $role = "student";
+    $existing = $sqlite.query("SELECT id FROM users LIMIT 1");
+    if ($existing.length == 0) {
+        $role = "admin";
+    }
+    $sqlite.exec("INSERT INTO users (username, email, password, display_name, role) VALUES ('"
+        + $username + "', '" + $email + "', '" + $password + "', '" + $username + "', '" + $role + "')");
+    print("[db] created user: " + $username + " (role=" + $role + ")");
     return getUserByName($username);
 }
 
@@ -282,4 +364,222 @@ def createChatMessage($sessionId, $role, $body) {
     return $rows[0];
 }
 
-print("[db] module loaded — initDb + helpers for users, roadmaps, topics, items, progress, notes, chat");
+print("[db] module loaded — initDb + helpers for users, roadmaps, topics, items, progress, notes, chat, courses, announcements, thoughts, certificates");
+
+// ============================================================================
+// Community: thoughts + announcements
+// ============================================================================
+
+def listThoughts() {
+    return $sqlite.query("SELECT t.id, t.user_id, t.body, t.tags, t.likes, t.created_at, u.username, u.display_name, u.avatar_url FROM thoughts t JOIN users u ON u.id = t.user_id ORDER BY t.id DESC");
+}
+
+def createThought($userId, $body, $tags) {
+    $sqlite.exec("INSERT INTO thoughts (user_id, body, tags) VALUES (" + $userId + ", '" + $body + "', '" + $tags + "')");
+    $rows = $sqlite.query("SELECT * FROM thoughts WHERE user_id = " + $userId + " ORDER BY id DESC LIMIT 1");
+    if ($rows.length == 0) { return null; }
+    return $rows[0];
+}
+
+def deleteThought($userId, $thoughtId) {
+    $sqlite.exec("DELETE FROM thoughts WHERE id = " + $thoughtId + " AND user_id = " + $userId);
+}
+
+def likeThought($userId, $thoughtId) {
+    $existing = $sqlite.query("SELECT id FROM thought_likes WHERE thought_id = " + $thoughtId + " AND user_id = " + $userId);
+    if ($existing.length > 0) {
+        $sqlite.exec("DELETE FROM thought_likes WHERE thought_id = " + $thoughtId + " AND user_id = " + $userId);
+        $sqlite.exec("UPDATE thoughts SET likes = MAX(0, likes - 1) WHERE id = " + $thoughtId);
+        return false;
+    }
+    $sqlite.exec("INSERT INTO thought_likes (thought_id, user_id) VALUES (" + $thoughtId + ", " + $userId + ")");
+    $sqlite.exec("UPDATE thoughts SET likes = likes + 1 WHERE id = " + $thoughtId);
+    return true;
+}
+
+def listAnnouncements() {
+    return $sqlite.query("SELECT a.id, a.title, a.body, a.category, a.pinned, a.created_at, u.username AS author FROM announcements a JOIN users u ON u.id = a.created_by ORDER BY a.pinned DESC, a.id DESC");
+}
+
+def createAnnouncement($userId, $title, $body, $category, $pinned) {
+    $pinBit = "0";
+    if ($pinned == true) { $pinBit = "1"; }
+    if ($category == null || $category == "") { $category = "general"; }
+    $sqlite.exec("INSERT INTO announcements (title, body, category, pinned, created_by) VALUES ('"
+        + $title + "', '" + $body + "', '" + $category + "', " + $pinBit + ", " + $userId + ")");
+    $rows = $sqlite.query("SELECT * FROM announcements ORDER BY id DESC LIMIT 1");
+    if ($rows.length == 0) { return null; }
+    return $rows[0];
+}
+
+def deleteAnnouncement($id) {
+    $sqlite.exec("DELETE FROM announcements WHERE id = " + $id);
+}
+
+// ============================================================================
+// Courses
+// ============================================================================
+
+def listCourses() {
+    return $sqlite.query("SELECT c.id, c.title, c.slug, c.description, c.category, c.difficulty, c.duration_hours, c.instructor, c.thumbnail_color, c.created_at, u.username AS author FROM courses c JOIN users u ON u.id = c.created_by ORDER BY c.id DESC");
+}
+
+def getCourseById($id) {
+    $rows = $sqlite.query("SELECT * FROM courses WHERE id = " + $id);
+    if ($rows.length == 0) { return null; }
+    return $rows[0];
+}
+
+def getCourseBySlug($slug) {
+    $rows = $sqlite.query("SELECT * FROM courses WHERE slug = '" + $slug + "'");
+    if ($rows.length == 0) { return null; }
+    return $rows[0];
+}
+
+def slugifyCourse($title) {
+    $s = $title.lower();
+    $s = $s.replace(" ", "-");
+    $s = $s.replace(",", "");
+    $s = $s.replace(".", "");
+    $s = $s.replace("/", "-");
+    $s = $s.replace(":", "");
+    // Append a pseudo-unique suffix using current row count
+    $rows = $sqlite.query("SELECT COUNT(*) AS n FROM courses");
+    $n = 0;
+    if ($rows.length > 0) { $n = $rows[0]["n"]; }
+    return $s + "-" + ($n + 1);
+}
+
+def createCourse($userId, $fields) {
+    $title       = $fields["title"];
+    $description = $fields["description"];
+    $category    = $fields["category"];
+    $difficulty  = $fields["difficulty"];
+    $duration    = $fields["duration_hours"];
+    $instructor  = $fields["instructor"];
+    $color       = $fields["thumbnail_color"];
+    if ($category   == null || $category   == "") { $category   = "General"; }
+    if ($difficulty == null || $difficulty == "") { $difficulty = "beginner"; }
+    if ($duration   == null || $duration   == "") { $duration   = "0"; }
+    if ($instructor == null || $instructor == "") { $instructor = ""; }
+    if ($color      == null || $color      == "") { $color      = "#6366f1"; }
+
+    $slug = slugifyCourse($title);
+    $sqlite.exec("INSERT INTO courses (title, slug, description, category, difficulty, duration_hours, instructor, thumbnail_color, created_by) VALUES ('"
+        + $title + "', '" + $slug + "', '" + $description + "', '" + $category + "', '"
+        + $difficulty + "', " + $duration + ", '" + $instructor + "', '" + $color + "', " + $userId + ")");
+    $rows = $sqlite.query("SELECT * FROM courses ORDER BY id DESC LIMIT 1");
+    if ($rows.length == 0) { return null; }
+    return $rows[0];
+}
+
+def updateCourse($id, $fields) {
+    $title       = $fields["title"];
+    $description = $fields["description"];
+    $category    = $fields["category"];
+    $difficulty  = $fields["difficulty"];
+    $duration    = $fields["duration_hours"];
+    $instructor  = $fields["instructor"];
+    $color       = $fields["thumbnail_color"];
+    if ($title       == null) { $title       = ""; }
+    if ($description == null) { $description = ""; }
+    if ($category    == null) { $category    = "General"; }
+    if ($difficulty  == null) { $difficulty  = "beginner"; }
+    if ($duration    == null) { $duration    = "0"; }
+    if ($instructor  == null) { $instructor  = ""; }
+    if ($color       == null) { $color       = "#6366f1"; }
+    $sqlite.exec("UPDATE courses SET title = '" + $title + "', description = '" + $description
+        + "', category = '" + $category + "', difficulty = '" + $difficulty
+        + "', duration_hours = " + $duration + ", instructor = '" + $instructor
+        + "', thumbnail_color = '" + $color + "', updated_at = CURRENT_TIMESTAMP WHERE id = " + $id);
+    return getCourseById($id);
+}
+
+def deleteCourse($id) {
+    $sqlite.exec("DELETE FROM course_modules WHERE course_id = " + $id);
+    $sqlite.exec("DELETE FROM courses WHERE id = " + $id);
+}
+
+def listCourseModules($courseId) {
+    return $sqlite.query("SELECT id, course_id, title, content, ordinal FROM course_modules WHERE course_id = " + $courseId + " ORDER BY ordinal ASC, id ASC");
+}
+
+def addCourseModule($courseId, $title, $content, $ordinal) {
+    if ($ordinal == null || $ordinal == "") { $ordinal = "0"; }
+    $sqlite.exec("INSERT INTO course_modules (course_id, title, content, ordinal) VALUES ("
+        + $courseId + ", '" + $title + "', '" + $content + "', " + $ordinal + ")");
+    $rows = $sqlite.query("SELECT * FROM course_modules ORDER BY id DESC LIMIT 1");
+    if ($rows.length == 0) { return null; }
+    return $rows[0];
+}
+
+def deleteCourseModule($moduleId) {
+    $sqlite.exec("DELETE FROM course_modules WHERE id = " + $moduleId);
+}
+
+// ============================================================================
+// Enrollments
+// ============================================================================
+
+def listEnrollments($userId) {
+    return $sqlite.query("SELECT e.id, e.user_id, e.course_id, e.status, e.progress_percent, e.enrolled_at, e.completed_at, c.title AS course_title, c.slug AS course_slug, c.category AS course_category, c.difficulty AS course_difficulty, c.duration_hours AS course_duration_hours, c.thumbnail_color AS course_color FROM enrollments e JOIN courses c ON c.id = e.course_id WHERE e.user_id = " + $userId + " ORDER BY e.id DESC");
+}
+
+def getEnrollment($userId, $courseId) {
+    $rows = $sqlite.query("SELECT * FROM enrollments WHERE user_id = " + $userId + " AND course_id = " + $courseId);
+    if ($rows.length == 0) { return null; }
+    return $rows[0];
+}
+
+def enrollUser($userId, $courseId) {
+    $existing = getEnrollment($userId, $courseId);
+    if ($existing != null) { return $existing; }
+    $sqlite.exec("INSERT INTO enrollments (user_id, course_id, status, progress_percent) VALUES ("
+        + $userId + ", " + $courseId + ", 'enrolled', 0)");
+    return getEnrollment($userId, $courseId);
+}
+
+def updateEnrollmentProgress($userId, $courseId, $percent) {
+    $status = "enrolled";
+    $completedClause = "NULL";
+    if (floor(num($percent)) >= 100) {
+        $status = "completed";
+        $completedClause = "CURRENT_TIMESTAMP";
+    }
+    $sqlite.exec("UPDATE enrollments SET progress_percent = " + $percent + ", status = '" + $status + "', completed_at = " + $completedClause + " WHERE user_id = " + $userId + " AND course_id = " + $courseId);
+    return getEnrollment($userId, $courseId);
+}
+
+def unenrollUser($userId, $courseId) {
+    $sqlite.exec("DELETE FROM enrollments WHERE user_id = " + $userId + " AND course_id = " + $courseId);
+}
+
+// ============================================================================
+// Certificates
+// ============================================================================
+
+def listCertificates($userId) {
+    return $sqlite.query("SELECT ct.id, ct.user_id, ct.course_id, ct.certificate_code, ct.issued_at, c.title AS course_title, c.slug AS course_slug, c.instructor, c.duration_hours, c.category AS course_category, u.display_name, u.username FROM certificates ct JOIN courses c ON c.id = ct.course_id JOIN users u ON u.id = ct.user_id WHERE ct.user_id = " + $userId + " ORDER BY ct.id DESC");
+}
+
+def getCertificate($userId, $courseId) {
+    $rows = $sqlite.query("SELECT * FROM certificates WHERE user_id = " + $userId + " AND course_id = " + $courseId);
+    if ($rows.length == 0) { return null; }
+    return $rows[0];
+}
+
+def issueCertificate($userId, $courseId) {
+    $existing = getCertificate($userId, $courseId);
+    if ($existing != null) { return $existing; }
+    // Generate a unique certificate code: MSR-<userId>-<courseId>-<timestamp>
+    $code = "MSR-" + $userId + "-" + $courseId + "-" + floor(num("1700000000")) + "-" + ($userId * 31 + $courseId * 7);
+    $sqlite.exec("INSERT INTO certificates (user_id, course_id, certificate_code) VALUES ("
+        + $userId + ", " + $courseId + ", '" + $code + "')");
+    return getCertificate($userId, $courseId);
+}
+
+def getCertificateByCode($code) {
+    $rows = $sqlite.query("SELECT ct.id, ct.user_id, ct.course_id, ct.certificate_code, ct.issued_at, c.title AS course_title, c.instructor, c.duration_hours, u.username, u.display_name FROM certificates ct JOIN courses c ON c.id = ct.course_id JOIN users u ON u.id = ct.user_id WHERE ct.certificate_code = '" + $code + "'");
+    if ($rows.length == 0) { return null; }
+    return $rows[0];
+}

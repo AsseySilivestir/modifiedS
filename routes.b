@@ -89,6 +89,34 @@ def ntRemoveOne($req, $res) { notes.removeOne($req, $res);   return null; }
 def aiTutor($req, $res) { ai.tutor($req, $res); return null; }
 def aiQuiz($req, $res)  { ai.quiz($req, $res);  return null; }
 
+// ---- Community ----
+def thListAll($req, $res)   { community.listAll($req, $res);    return null; }
+def thCreateOne($req, $res) { community.createOne($req, $res);  return null; }
+def thRemoveOne($req, $res) { community.removeOne($req, $res);  return null; }
+def thLikeOne($req, $res)   { community.likeOne($req, $res);    return null; }
+
+def anList($req, $res)      { community.listAnn($req, $res);    return null; }
+def anCreate($req, $res)    { community.createAnn($req, $res);  return null; }
+def anRemove($req, $res)    { community.removeAnn($req, $res);  return null; }
+
+// ---- Courses ----
+def crsListAll($req, $res)   { courses.listAll($req, $res);    return null; }
+def crsShowOne($req, $res)   { courses.showOne($req, $res);    return null; }
+def crsCreateOne($req, $res) { courses.createOne($req, $res);  return null; }
+def crsUpdateOne($req, $res) { courses.updateOne($req, $res);  return null; }
+def crsRemoveOne($req, $res) { courses.removeOne($req, $res);  return null; }
+def crsListModules($req, $res) { courses.listModules($req, $res); return null; }
+def crsAddModule($req, $res)   { courses.addModule($req, $res);   return null; }
+def crsRemoveModule($req, $res){ courses.removeModule($req, $res);return null; }
+
+def enrList($req, $res)     { courses.listEnroll($req, $res);  return null; }
+def enrEnroll($req, $res)   { courses.enroll($req, $res);      return null; }
+def enrUnenroll($req, $res) { courses.unenroll($req, $res);    return null; }
+def enrProgress($req, $res) { courses.setProgress($req, $res); return null; }
+
+// ---- Certificates ----
+def certListMine($req, $res) { certificates.listMine($req, $res); return null; }
+
 def registerAll($sua) {
     // ---- Health ----
     $sua.server.get("/api/health", healthHandler);
@@ -124,8 +152,38 @@ def registerAll($sua) {
     $sua.server.post("/api/ai/tutor", aiTutor);
     $sua.server.post("/api/ai/quiz",  aiQuiz);
 
-    print("[routes] registered 21 routes under /api/*");
+    // ---- Community: thoughts (public read, auth write) ----
+    $sua.server.get  ("/api/thoughts",         thListAll);
+    $sua.server.post ("/api/thoughts",         thCreateOne);
+    $sua.server.delete("/api/thoughts/:id",    thRemoveOne);
+    $sua.server.post ("/api/thoughts/:id/like", thLikeOne);
+
+    // ---- Announcements (public read, admin write) ----
+    $sua.server.get  ("/api/announcements",        anList);
+    $sua.server.post ("/api/announcements",        anCreate);
+    $sua.server.delete("/api/announcements/:id",   anRemove);
+
+    // ---- Courses (public read, admin write) ----
+    $sua.server.get  ("/api/courses",                       crsListAll);
+    $sua.server.get  ("/api/courses/:id",                   crsShowOne);
+    $sua.server.post ("/api/courses",                       crsCreateOne);
+    $sua.server.put  ("/api/courses/:id",                   crsUpdateOne);
+    $sua.server.delete("/api/courses/:id",                  crsRemoveOne);
+    $sua.server.get  ("/api/courses/:id/modules",           crsListModules);
+    $sua.server.post ("/api/courses/:id/modules",           crsAddModule);
+    $sua.server.delete("/api/courses/:id/modules/:mid",     crsRemoveModule);
+
+    // ---- Enrollments (auth) ----
+    $sua.server.get  ("/api/enrollments",                  enrList);
+    $sua.server.post ("/api/enrollments/:courseId",        enrEnroll);
+    $sua.server.delete("/api/enrollments/:courseId",       enrUnenroll);
+    $sua.server.post ("/api/enrollments/:courseId/progress", enrProgress);
+
+    // ---- Certificates (auth list) ----
+    $sua.server.get("/api/certificates",            certListMine);
+
+    print("[routes] registered 38 routes under /api/*");
     return null;
 }
 
-print("[routes] module loaded — registerAll(sua) wires 21 routes");
+print("[routes] module loaded — registerAll(sua) wires 38 routes");

@@ -1,19 +1,20 @@
-# dependencies / runtime artifacts
-*.db
-*.db-journal
-*.sqlite
-*.sqlite-journal
-node_modules/
-.next/
-dist/
-build/
-
-# editor / OS junk
-.DS_Store
-.vscode/
-.idea/
-*.swp
-*.log
 
 # bantu local registry
+# dependencies / runtime artifacts
+# editor / OS junk
+*.db
+*.db-journal
+*.log
+*.sqlite
+*.sqlite-journal
+*.swp
+.DS_Store
 .bantu-cache/
+.idea/
+.next/
+.vscode/
+/tmp/
+build/
+dist/
+modifiedS.db
+node_modules/

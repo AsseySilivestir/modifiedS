@@ -29,6 +29,9 @@ include "./roadmaps.b" as roadmaps;// roadmaps.list / show / topics / items
 include "./progress.b" as progress;// progress.list / set / remove
 include "./notes.b"    as notes;   // notes.list / create / show / update / remove
 include "./ai.b"       as ai;      // ai.tutor / ai.quiz
+include "./community.b" as community; // thoughts + announcements
+include "./courses.b"  as courses; // course catalog + enrollments + modules
+include "./certificates.b" as certificates; // list + printable HTML view
 include "./routes.b" as routes;    // routes.registerAll(sua)
 
 // 2. Initialize SQLite
