@@ -142,6 +142,33 @@ function toast(msg, kind = '') {
 
 /* ─── 2. API client ────────────────────────────────────────────────── */
 
+// Wrapper around fetch that retries on network errors (Render free-tier
+// sleeps after 15 min of inactivity, so the first request after sleep may
+// fail with "Failed to fetch" while the server is spinning back up).
+async function fetchWithRetry(url, opts, attempts = 3, delayMs = 1500) {
+  let lastErr;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 20000); // 20s timeout per attempt
+      const r = await fetch(url, { ...opts, signal: ctrl.signal });
+      clearTimeout(t);
+      return r;
+    } catch (e) {
+      lastErr = e;
+      // Only retry on network errors (not on HTTP error responses)
+      const isNetwork = e.name === 'AbortError' ||
+                        e.message === 'Failed to fetch' ||
+                        e.message.includes('Network') ||
+                        e.message.includes('network');
+      if (!isNetwork || i === attempts - 1) throw e;
+      // Wait before retrying (linear backoff)
+      await new Promise(res => setTimeout(res, delayMs * (i + 1)));
+    }
+  }
+  throw lastErr;
+}
+
 const api = {
   async req(path, { method = 'GET', body, auth = false } = {}) {
     const headers = { 'Content-Type': 'application/json' };
@@ -150,9 +177,13 @@ const api = {
     if (body !== undefined) opts.body = JSON.stringify(body);
     let r;
     try {
-      r = await fetch('/api' + path, opts);
+      r = await fetchWithRetry('/api' + path, opts);
     } catch (e) {
-      throw new Error('Network error: ' + e.message);
+      // Give a friendlier error message for cold-start failures
+      const msg = e.message === 'Failed to fetch' || e.message.includes('Network')
+        ? 'Server is starting up (or offline). Please wait a few seconds and try again.'
+        : 'Network error: ' + e.message;
+      throw new Error(msg);
     }
     let j = null;
     try { j = await r.json(); } catch (_) { /* maybe empty body */ }
@@ -360,13 +391,19 @@ function view404() {
 
 function viewError(e) {
   const needLogin = e.status === 401;
+  const isNetwork = !e.status && (e.message.includes('starting up') || e.message.includes('Network'));
   return el('div', { class: 'empty' },
-    el('div', { class: 'empty-icon' }, needLogin ? '🔒' : '⚠️'),
-    el('h3', {}, needLogin ? 'Login required' : 'Something went wrong'),
+    el('div', { class: 'empty-icon' }, needLogin ? '🔒' : (isNetwork ? '⏳' : '⚠️')),
+    el('h3', {}, needLogin ? 'Login required' : (isNetwork ? 'Server is waking up' : 'Something went wrong')),
     el('p', {}, e.message || 'Unknown error'),
-    needLogin
-      ? el('a', { class: 'btn', href: '#/login' }, 'Login')
-      : el('a', { class: 'btn', href: '#/' }, 'Back home'),
+    isNetwork
+      ? el('div', { class: 'flex gap-2' },
+          el('button', { class: 'btn', onclick: () => location.reload() }, 'Retry now'),
+          el('a', { class: 'btn btn-ghost', href: '#/' }, 'Back home'),
+        )
+      : (needLogin
+          ? el('a', { class: 'btn', href: '#/login' }, 'Login')
+          : el('a', { class: 'btn', href: '#/' }, 'Back home')),
   );
 }
 
@@ -1070,7 +1107,9 @@ async function viewTutor(root) {
         const block = el('div', { class: 'card', style: 'padding:14px;margin-bottom:8px' },
           el('div', { style: 'font-weight:600;margin-bottom:6px' }, (i + 1) + '. ' + q.question),
         );
-        (q.options || []).forEach((opt, oi) => {
+        // Backend returns `choices`, but older caches may have `options` — accept both
+        const opts = q.choices || q.options || [];
+        opts.forEach((opt, oi) => {
           const isCorrect = q.answer === oi || q.answer === opt;
           block.appendChild(
             el('div', {
