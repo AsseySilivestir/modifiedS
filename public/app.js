@@ -1591,13 +1591,14 @@ async function viewCertificates(root) {
   const grid = el('div', { class: 'cert-grid' });
   for (const ct of certs) {
     grid.appendChild(el('div', { class: 'cert-card' },
+      el('div', { class: 'cert-badge-tag' }, '★ Verified'),
       el('div', { class: 'cert-seal' }, '★'),
       el('h3', {}, ct.course_title || 'Course'),
       el('div', { class: 'cert-code' }, 'Code: ' + ct.certificate_code),
       el('div', { class: 'cert-issued' }, 'Issued ' + timeAgo(ct.issued_at)),
       el('div', { class: 'cert-actions' },
         el('button', { class: 'btn btn-sm', onclick: () => openCertificatePrintWindow(ct) }, 'View / Print'),
-        el('button', { class: 'btn btn-ghost btn-sm', onclick: () => openCertificatePrintWindow(ct) }, 'Download PDF'),
+        el('button', { class: 'btn btn-ghost btn-sm', onclick: () => downloadCertificatePDF(ct) }, 'Download PDF'),
       ),
     ));
   }
@@ -1662,6 +1663,290 @@ function openCertificatePrintWindow(ct) {
 </body></html>`);
   w.document.close();
 }
+
+/**
+ * Generates a true PDF certificate using jsPDF and triggers a direct download.
+ * Layout (A4 landscape, 297×210 mm):
+ *   - Outer double border in indigo
+ *   - Corner ornaments
+ *   - Top center: college badge (circular emblem with crest + ribbon)
+ *   - "CERTIFICATE OF COMPLETION" title
+ *   - "This certificate is proudly presented to"
+ *   - Recipient NAME (large, indigo, underlined)
+ *   - Course name + description
+ *   - Bottom: 3-column meta (Date issued · Certificate code · Verify at)
+ *   - Bottom-right: official gold seal
+ *   - Bottom-left: signature line
+ *   - Diagonal watermarks across the page ("modifiedS ACADEMY · OFFICIAL")
+ */
+function downloadCertificatePDF(ct) {
+  if (typeof window.jspdf === 'undefined' || !window.jspdf.jsPDF) {
+    toast('PDF library failed to load — using print view instead.', 'error');
+    openCertificatePrintWindow(ct);
+    return;
+  }
+  const { jsPDF } = window.jspdf;
+
+  const displayName = ct.display_name || ct.username || 'Learner';
+  const courseTitle = ct.course_title || 'Course';
+  const instructor  = ct.instructor || 'modifiedS Academy';
+  const issuedRaw   = ct.issued_at || new Date().toISOString();
+  const issuedAt    = issuedRaw.replace('T', ' ').replace('Z', '').substring(0, 19);
+  const duration    = ct.duration_hours || 0;
+  const code        = ct.certificate_code || ('MSR-' + Date.now());
+
+  // A4 landscape: 297 × 210 mm
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  const W = 297, H = 210;
+
+  // -------- Background: subtle cream wash --------
+  doc.setFillColor(252, 252, 248);
+  doc.rect(0, 0, W, H, 'F');
+
+  // -------- Watermarks (drawn first so they sit behind everything) --------
+  // Large diagonal watermark text across the page
+  doc.setTextColor(99, 102, 241);       // indigo-500
+  doc.setGState(new doc.GState({ opacity: 0.06 }));
+  doc.setFont('times', 'italic', 'bold');
+  doc.setFontSize(72);
+  doc.text('modifiedS', W / 2, H / 2, { align: 'center', angle: 35 });
+  doc.setFontSize(28);
+  doc.text('ACADEMY · OFFICIAL', W / 2, H / 2 + 22, { align: 'center', angle: 35 });
+  // Repeat along the diagonal axis for full coverage
+  doc.setFontSize(48);
+  doc.text('CERTIFIED', 60, 60, { align: 'center', angle: 35 });
+  doc.text('CERTIFIED', W - 60, H - 50, { align: 'center', angle: 35 });
+  doc.setGState(new doc.GState({ opacity: 1 }));
+
+  // -------- Outer double border --------
+  doc.setDrawColor(99, 102, 241);
+  doc.setLineWidth(2);
+  doc.rect(8, 8, W - 16, H - 16);
+  doc.setLineWidth(0.4);
+  doc.rect(12, 12, W - 24, H - 24);
+
+  // Corner ornaments (small diamonds at each corner)
+  const corners = [[14, 14], [W - 14, 14], [14, H - 14], [W - 14, H - 14]];
+  for (const [cx, cy] of corners) {
+    doc.setFillColor(99, 102, 241);
+    doc.triangle(cx - 2.5, cy, cx, cy - 2.5, cx + 2.5, cy, 'F');
+    doc.triangle(cx - 2.5, cy, cx, cy + 2.5, cx + 2.5, cy, 'F');
+  }
+
+  // -------- Top ribbon --------
+  doc.setFillColor(99, 102, 241);
+  doc.roundedRect(W / 2 - 50, 20, 100, 9, 2, 2, 'F');
+  doc.setTextColor(255, 255, 255);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.text('modifiedS  ACADEMY', W / 2, 26, { align: 'center' });
+
+  // -------- College badge (circular emblem with crest + ribbon tails) --------
+  drawCollegeBadge(doc, W / 2, 48, 16);
+
+  // -------- Title --------
+  doc.setTextColor(31, 41, 55);
+  doc.setFont('times', 'normal');
+  doc.setFontSize(34);
+  doc.text('Certificate of Completion', W / 2, 84, { align: 'center' });
+
+  // Decorative line under title
+  doc.setDrawColor(199, 210, 254);
+  doc.setLineWidth(0.5);
+  doc.line(W / 2 - 50, 88, W / 2 + 50, 88);
+
+  // -------- "presented to" --------
+  doc.setTextColor(107, 114, 128);
+  doc.setFont('times', 'italic');
+  doc.setFontSize(13);
+  doc.text('This certificate is proudly presented to', W / 2, 100, { align: 'center' });
+
+  // -------- Recipient name --------
+  doc.setTextColor(79, 70, 229);
+  doc.setFont('times', 'bold');
+  doc.setFontSize(38);
+  doc.text(displayName, W / 2, 116, { align: 'center' });
+
+  // Name underline (gradient-look using overlapping segments)
+  doc.setLineWidth(1);
+  doc.setDrawColor(199, 210, 254);
+  doc.line(W / 2 - 70, 120, W / 2 + 70, 120);
+  doc.setDrawColor(99, 102, 241);
+  doc.line(W / 2 - 40, 120, W / 2 + 40, 120);
+
+  // -------- Course description block --------
+  doc.setTextColor(75, 85, 99);
+  doc.setFont('times', 'normal');
+  doc.setFontSize(13);
+  doc.text('For successfully completing all required modules and demonstrating proficiency in', W / 2, 134, { align: 'center' });
+
+  doc.setTextColor(31, 41, 55);
+  doc.setFont('times', 'bold');
+  doc.setFontSize(20);
+  doc.text(courseTitle, W / 2, 144, { align: 'center' });
+
+  doc.setTextColor(75, 85, 99);
+  doc.setFont('times', 'italic');
+  doc.setFontSize(11);
+  const durText = duration > 0
+    ? 'A ' + duration + '-hour course'
+    : 'A self-paced course';
+  doc.text(durText + '  ·  Instructed by ' + instructor, W / 2, 152, { align: 'center' });
+
+  // -------- Meta row (3 columns) --------
+  const metaY = 172;
+  doc.setDrawColor(229, 231, 235);
+  doc.setLineWidth(0.3);
+  doc.line(28, metaY - 6, W - 28, metaY - 6);
+
+  const cols = [
+    { label: 'DATE ISSUED',     value: issuedAt },
+    { label: 'CERTIFICATE CODE', value: code },
+    { label: 'VERIFY AT',       value: 'modifiedS.app' },
+  ];
+  const colW = (W - 56) / 3;
+  for (let i = 0; i < 3; i++) {
+    const cx = 28 + colW * i + colW / 2;
+    doc.setTextColor(156, 163, 175);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    doc.text(cols[i].label, cx, metaY, { align: 'center' });
+    doc.setTextColor(31, 41, 55);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(11);
+    doc.text(cols[i].value, cx, metaY + 6, { align: 'center' });
+  }
+
+  // -------- Signature line (bottom-left) --------
+  const sigX = 50, sigY = 188;
+  doc.setDrawColor(31, 41, 55);
+  doc.setLineWidth(0.4);
+  doc.line(sigX, sigY, sigX + 60, sigY);
+  doc.setTextColor(31, 41, 55);
+  doc.setFont('times', 'italic');
+  doc.setFontSize(12);
+  doc.text('Academic Director', sigX + 30, sigY - 3, { align: 'center' });
+  doc.setTextColor(107, 114, 128);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  doc.text('modifiedS Academy', sigX + 30, sigY + 4, { align: 'center' });
+
+  // -------- Official gold seal (bottom-right) --------
+  drawGoldSeal(doc, W - 48, sigY - 4, 13);
+
+  // -------- Footer brand --------
+  doc.setTextColor(156, 163, 175);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7);
+  doc.text('This certificate can be verified at modifiedS.app/verify using the certificate code above.', W / 2, H - 8, { align: 'center' });
+
+  // -------- Download --------
+  const filename = 'modifiedS-Certificate-' + sanitizeFilename(courseTitle) + '.pdf';
+  doc.save(filename);
+  toast('Certificate PDF downloaded 📄', 'success');
+}
+
+/** Draws a circular college badge centered at (cx, cy) with radius r. */
+function drawCollegeBadge(doc, cx, cy, r) {
+  // Outer gold ring
+  doc.setFillColor(212, 175, 55);     // gold
+  doc.circle(cx, cy, r + 1.2, 'F');
+  // Inner indigo disc
+  doc.setFillColor(79, 70, 229);      // indigo-600
+  doc.circle(cx, cy, r, 'F');
+  // Cream center disc
+  doc.setFillColor(252, 252, 248);
+  doc.circle(cx, cy, r - 2, 'F');
+
+  // Crest: open book (a "V" shape)
+  doc.setDrawColor(31, 41, 55);
+  doc.setLineWidth(0.7);
+  doc.line(cx - r * 0.55, cy - r * 0.15, cx, cy + r * 0.05);
+  doc.line(cx, cy + r * 0.05, cx + r * 0.55, cy - r * 0.15);
+  doc.line(cx, cy + r * 0.05, cx, cy + r * 0.45);
+
+  // Star above book
+  doc.setFillColor(212, 175, 55);
+  drawStar(doc, cx, cy - r * 0.5, r * 0.22);
+
+  // Ribbon tails below the badge
+  doc.setFillColor(212, 175, 55);
+  doc.triangle(cx - r * 0.45, cy + r * 0.9, cx - r * 0.15, cy + r * 0.9, cx - r * 0.30, cy + r * 1.4, 'F');
+  doc.triangle(cx + r * 0.45, cy + r * 0.9, cx + r * 0.15, cy + r * 0.9, cx + r * 0.30, cy + r * 1.4, 'F');
+  doc.setFillColor(99, 102, 241);
+  doc.rect(cx - r * 0.4, cy + r * 0.7, r * 0.8, r * 0.25, 'F');
+
+  // "EST. 2024" text inside ribbon
+  doc.setTextColor(255, 255, 255);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(5);
+  doc.text('EST. 2024', cx, cy + r * 0.85, { align: 'center' });
+
+  // "M" letter at top of ring
+  doc.setTextColor(212, 175, 55);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(6);
+  doc.text('★ MODIFIEDS ACADEMY ★', cx, cy - r - 2.5, { align: 'center' });
+}
+
+/** Draws an official gold seal at (cx, cy) with radius r. */
+function drawGoldSeal(doc, cx, cy, r) {
+  // Serrated outer edge (12 points)
+  doc.setFillColor(212, 175, 55);
+  const points = 12;
+  const pts = [];
+  for (let i = 0; i < points * 2; i++) {
+    const angle = (Math.PI * 2 * i) / (points * 2) - Math.PI / 2;
+    const rad = (i % 2 === 0) ? r : r * 0.85;
+    pts.push([cx + Math.cos(angle) * rad, cy + Math.sin(angle) * rad]);
+  }
+  // Draw polygon
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[i], b = pts[(i + 1) % pts.length];
+    doc.line(a[0], a[1], b[0], b[1]);
+  }
+  doc.setFillColor(212, 175, 55);
+  doc.circle(cx, cy, r * 0.75, 'F');
+
+  // Inner indigo ring
+  doc.setDrawColor(79, 70, 229);
+  doc.setLineWidth(0.5);
+  doc.circle(cx, cy, r * 0.6, 'S');
+  doc.setFillColor(79, 70, 229);
+  doc.circle(cx, cy, r * 0.5, 'F');
+
+  // Star center
+  drawStar(doc, cx, cy + 1, r * 0.3);
+  doc.setTextColor(255, 255, 255);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(4.5);
+  doc.text('OFFICIAL', cx, cy - r * 0.7, { align: 'center' });
+  doc.text('SEAL', cx, cy + r * 0.7, { align: 'center' });
+
+  // Rotation text around seal
+  doc.setFontSize(3.5);
+  doc.setTextColor(212, 175, 55);
+  doc.text('CERTIFIED · VERIFIED · SEALED', cx, cy + r + 2, { align: 'center' });
+}
+
+/** Draws a 5-point star centered at (cx, cy) with radius r. */
+function drawStar(doc, cx, cy, r) {
+  const pts = [];
+  for (let i = 0; i < 10; i++) {
+    const angle = (Math.PI * i) / 5 - Math.PI / 2;
+    const rad = (i % 2 === 0) ? r : r * 0.4;
+    pts.push([cx + Math.cos(angle) * rad, cy + Math.sin(angle) * rad]);
+  }
+  // Construct polygon path using lines + fill via triangles
+  for (let i = 1; i < pts.length - 1; i++) {
+    doc.triangle(pts[0][0], pts[0][1], pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1], 'F');
+  }
+}
+
+function sanitizeFilename(s) {
+  return String(s || 'certificate').replace(/[^a-z0-9_-]+/gi, '_').replace(/_+/g, '_').substring(0, 60);
+}
+
 
 async function viewAdmin(root) {
   root.classList.add('view-admin');

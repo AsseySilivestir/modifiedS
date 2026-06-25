@@ -1167,7 +1167,25 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 24px 0; }
   text-align: center;
   display: flex; flex-direction: column; align-items: center; gap: 8px;
   position: relative;
+  overflow: hidden;
 }
+/* Subtle diagonal watermark on the card preview */
+.cert-card::before {
+  content: 'modifiedS ACADEMY';
+  position: absolute;
+  inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-family: 'Georgia', serif;
+  font-size: 28px;
+  font-weight: 700;
+  font-style: italic;
+  color: color-mix(in srgb, var(--brand-500) 6%, transparent);
+  transform: rotate(-30deg);
+  pointer-events: none;
+  letter-spacing: 3px;
+  z-index: 0;
+}
+.cert-card > * { position: relative; z-index: 1; }
 .cert-seal {
   width: 56px; height: 56px;
   border: 3px solid var(--brand-500);
@@ -1176,11 +1194,22 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 24px 0; }
   color: var(--brand-500);
   font-size: 22px;
   background: linear-gradient(135deg, color-mix(in srgb, var(--brand-500) 14%, transparent), transparent);
+  box-shadow: 0 0 0 3px #d4af37, 0 0 0 5px color-mix(in srgb, var(--brand-500) 50%, transparent);
 }
 .cert-card h3 { margin: 4px 0; font-size: 16px; }
 .cert-code { font-size: 11px; color: var(--text-muted); word-break: break-all; }
 .cert-issued { font-size: 12px; color: var(--text-muted); }
-.cert-actions { display: flex; gap: 8px; margin-top: 12px; }
+.cert-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; justify-content: center; }
+.cert-badge-tag {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 10px; font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #d4af37, #f4d160);
+  color: #4f46e5;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
 
 /* ---- Admin panel ---- */
 .tab-bar { display: flex; gap: 6px; border-bottom: 1px solid var(--border); margin-bottom: 24px; }
