@@ -142,6 +142,24 @@ function toast(msg, kind = '') {
 
 /* ─── 2. API client ────────────────────────────────────────────────── */
 
+// IMPORTANT — Bantu/Sua runtime limitation:
+// The Bantu HTTP server (v1.2.2) is single-threaded and CRASHES SILENTLY
+// when two API requests arrive at the same time (the process just exits
+// with no error in the log). Browsers naturally fire many requests in
+// parallel (HTML + CSS + JS + favicon + 4-5 API calls) on page load,
+// which kills the server and makes courses/community/AI look "broken".
+//
+// Fix: serialize ALL API calls through a single global queue so the
+// Bantu server only ever sees one request at a time. Static asset
+// requests (/, /app.js, /styles.css, /favicon.svg) are fine because
+// the static-file path is handled before the API router.
+
+let _apiChain = Promise.resolve();
+function serialize(p) {
+  _apiChain = _apiChain.then(() => p().finally(() => null), () => p().finally(() => null));
+  return _apiChain;
+}
+
 // Wrapper around fetch that retries on network errors (Render free-tier
 // sleeps after 15 min of inactivity, so the first request after sleep may
 // fail with "Failed to fetch" while the server is spinning back up).
@@ -175,18 +193,31 @@ const api = {
     if (auth && state.token) headers['Authorization'] = 'Bearer ' + state.token;
     const opts = { method, headers };
     if (body !== undefined) opts.body = JSON.stringify(body);
-    let r;
-    try {
-      r = await fetchWithRetry('/api' + path, opts);
-    } catch (e) {
-      // Give a friendlier error message for cold-start failures
-      const msg = e.message === 'Failed to fetch' || e.message.includes('Network')
-        ? 'Server is starting up (or offline). Please wait a few seconds and try again.'
-        : 'Network error: ' + e.message;
-      throw new Error(msg);
-    }
-    let j = null;
-    try { j = await r.json(); } catch (_) { /* maybe empty body */ }
+    // Serialize the ENTIRE request lifecycle (fetch + body read) so the
+    // Bantu server never sees two concurrent requests — its HTTP runtime
+    // crashes silently under concurrent load. A tiny 30ms pause between
+    // requests gives Bantu time to release its socket buffers.
+    const { r, j } = await serialize(async () => {
+      let r;
+      try {
+        r = await fetchWithRetry('/api' + path, opts);
+      } catch (e) {
+        // Give a friendlier error message for cold-start failures
+        const msg = e.message === 'Failed to fetch' || e.message.includes('Network')
+          ? 'Server is starting up (or offline). Please wait a few seconds and try again.'
+          : 'Network error: ' + e.message;
+        throw new Error(msg);
+      }
+      // Read the body INSIDE the serialized block so the next request
+      // does not start until this response is fully consumed.
+      let j = null;
+      try { j = await r.json(); } catch (_) { /* maybe empty body */ }
+      // 80ms pause between requests — gives the Bantu single-threaded
+      // HTTP runtime time to release its socket buffers before the next
+      // request arrives. Without this, rapid navigation can crash it.
+      await new Promise(res => setTimeout(res, 80));
+      return { r, j };
+    });
     if (!r.ok) {
       const msg = (j && (j.error || j.message)) || ('HTTP ' + r.status);
       const err = new Error(msg);
@@ -2359,12 +2390,24 @@ function boot() {
   // Hash change → route
   window.addEventListener('hashchange', router);
 
-  // Initial route
-  if (!location.hash) location.hash = '#/';
-  router();
+  // Initial route — set the hash FIRST (which fires hashchange → router),
+  // then call router() only if the hash was already set (no event would
+  // fire in that case). This avoids calling router() twice on first load,
+  // which would fire two parallel API calls and crash the Bantu server.
+  if (!location.hash) {
+    location.hash = '#/';   // fires hashchange → router() once
+  } else {
+    router();                // hash was already set, no event fires
+  }
 
-  // Background refresh of user (validates token)
+  // Background refresh of user (validates token) — serialized through
+  // api.req() so it does not run concurrently with router's API calls.
   if (state.token) refreshMe();
 }
 
-document.addEventListener('DOMContentLoaded', boot);
+document.addEventListener('DOMContentLoaded', () => {
+  // Small delay so the browser finishes consuming the inlined HTML
+  // response before we fire the first API call. Without this, Bantu
+  // can see the HTML response and the first API request overlap.
+  setTimeout(boot, 50);
+});

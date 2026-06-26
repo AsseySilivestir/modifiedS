@@ -103,5 +103,10 @@ ENV DB_PATH=/data/modifiedS.db
 EXPOSE 8080
 
 # ─── Runtime ────────────────────────────────────────────────────────
-# `bantu run server.b` blocks forever, serving HTTP on $PORT.
-CMD ["bantu", "run", "server.b"]
+# start.sh wraps `bantu run server.b` with an auto-restart loop. The
+# Bantu/Sua HTTP server is single-threaded and can exit silently under
+# concurrent load; the wrapper restarts it within 1s so users see at
+# most one failed request before recovery.
+COPY start.sh /app/start.sh
+RUN chmod +x /app/start.sh
+CMD ["/app/start.sh"]
