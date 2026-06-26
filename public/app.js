@@ -156,8 +156,23 @@ function toast(msg, kind = '') {
 
 let _apiChain = Promise.resolve();
 function serialize(p) {
-  _apiChain = _apiChain.then(() => p().finally(() => null), () => p().finally(() => null));
-  return _apiChain;
+  // Both success and rejection handlers run p(). After p() resolves or
+  // rejects, `.finally(() => null)` releases any resources and returns
+  // null so the chain itself stays RESOLVED (not rejected). This means:
+  //   - the next serialize() call's p() will always run
+  //   - the caller of THIS serialize() still gets p()'s real value/error
+  //     (because serialize returns `_apiChain` which is the .then result,
+  //      and the .then handler returns p()'s promise, not the .finally)
+  // The `.finally` only affects what the NEXT link sees, not what the
+  // current caller sees.
+  const result = _apiChain.then(
+    () => p(),
+    () => p()
+  );
+  // Advance the chain — use a swallow-rejection version so a failed
+  // request doesn't poison subsequent requests.
+  _apiChain = result.then(() => null, () => null);
+  return result;
 }
 
 // Wrapper around fetch that retries on network errors (Render free-tier
@@ -210,8 +225,22 @@ const api = {
       }
       // Read the body INSIDE the serialized block so the next request
       // does not start until this response is fully consumed.
-      let j = null;
-      try { j = await r.json(); } catch (_) { /* maybe empty body */ }
+      // Default to {} so callers' `data.courses || []` patterns never
+      // throw "can't access property X, data is null" if Bantu returns
+      // an empty 200 body (which can happen if the runtime is under
+      // stress or mid-restart).
+      let j = {};
+      if (r.ok) {
+        try {
+          const text = await r.text();
+          if (text && text.trim()) {
+            j = JSON.parse(text);
+          }
+        } catch (_) { /* keep j = {} */ }
+      } else {
+        // On error status, still try to parse body for error message
+        try { j = await r.json(); } catch (_) { j = {}; }
+      }
       // 80ms pause between requests — gives the Bantu single-threaded
       // HTTP runtime time to release its socket buffers before the next
       // request arrives. Without this, rapid navigation can crash it.
@@ -225,7 +254,7 @@ const api = {
       err.body = j;
       throw err;
     }
-    return j;
+    return j || {};
   },
 
   // Auth
