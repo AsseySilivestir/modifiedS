@@ -26,6 +26,21 @@
 
 $sqlite = sua.sqlite;
 
+// SQL escape — doubles single quotes (standard SQLite string escaping).
+// WITHOUT THIS, any user input containing an apostrophe (e.g. "Python's Math")
+// will break the SQL INSERT/UPDATE silently — Bantu does not throw on SQL
+// errors, it just leaves the row uninserted. The controller then returns
+// 201 with the PREVIOUS row from "ORDER BY id DESC LIMIT 1", making it
+// look like the insert succeeded when nothing was saved.
+//
+// Usage:  "INSERT INTO t (name) VALUES ('" + sql($name) + "')"
+//         "WHERE email = '" + sql($email) + "'"
+def sql($s) {
+    if ($s == null) { return ""; }
+    $s = "" + $s;            // coerce numbers/bools to string
+    return $s.replace("'", "''");
+}
+
 def initDb() {
     // Pick a DB path:
     //   1. $DB_PATH env var (explicit — used by Render)
@@ -211,13 +226,13 @@ def getUserById($id) {
 }
 
 def getUserByEmail($email) {
-    $rows = $sqlite.query("SELECT * FROM users WHERE email = '" + $email + "'");
+    $rows = $sqlite.query("SELECT * FROM users WHERE email = '" + sql($email) + "'");
     if ($rows.length == 0) { return null; }
     return $rows[0];
 }
 
 def getUserByName($name) {
-    $rows = $sqlite.query("SELECT * FROM users WHERE username = '" + $name + "'");
+    $rows = $sqlite.query("SELECT * FROM users WHERE username = '" + sql($name) + "'");
     if ($rows.length == 0) { return null; }
     return $rows[0];
 }
@@ -230,7 +245,7 @@ def createUser($username, $email, $password) {
         $role = "admin";
     }
     $sqlite.exec("INSERT INTO users (username, email, password, display_name, role) VALUES ('"
-        + $username + "', '" + $email + "', '" + $password + "', '" + $username + "', '" + $role + "')");
+        + sql($username) + "', '" + sql($email) + "', '" + sql($password) + "', '" + sql($username) + "', '" + $role + "')");
     print("[db] created user: " + $username + " (role=" + $role + ")");
     return getUserByName($username);
 }
@@ -239,8 +254,8 @@ def updateUser($id, $fields) {
     $display = $fields["display_name"];
     $bio     = $fields["bio"];
     $avatar  = $fields["avatar_url"];
-    $sqlite.exec("UPDATE users SET display_name = '" + $display + "', bio = '" + $bio
-        + "', avatar_url = '" + $avatar + "', updated_at = CURRENT_TIMESTAMP WHERE id = " + $id);
+    $sqlite.exec("UPDATE users SET display_name = '" + sql($display) + "', bio = '" + sql($bio)
+        + "', avatar_url = '" + sql($avatar) + "', updated_at = CURRENT_TIMESTAMP WHERE id = " + $id);
     return getUserById($id);
 }
 
@@ -251,13 +266,13 @@ def listRoadmaps() {
 }
 
 def getRoadmapById($id) {
-    $rows = $sqlite.query("SELECT * FROM roadmaps WHERE id = '" + $id + "'");
+    $rows = $sqlite.query("SELECT * FROM roadmaps WHERE id = '" + sql($id) + "'");
     if ($rows.length == 0) { return null; }
     return $rows[0];
 }
 
 def getRoadmapBySlug($slug) {
-    $rows = $sqlite.query("SELECT * FROM roadmaps WHERE slug = '" + $slug + "'");
+    $rows = $sqlite.query("SELECT * FROM roadmaps WHERE slug = '" + sql($slug) + "'");
     if ($rows.length == 0) { return null; }
     return $rows[0];
 }
@@ -266,9 +281,9 @@ def insertRoadmap($r) {
     $featured = "0";
     if ($r["featured"] == true) { $featured = "1"; }
     $sqlite.exec("INSERT OR IGNORE INTO roadmaps (id, title, slug, description, category, icon, color, difficulty, featured, topic_count) VALUES ('"
-        + $r["id"] + "', '" + $r["title"] + "', '" + $r["slug"] + "', '"
-        + $r["description"] + "', '" + $r["category"] + "', '"
-        + $r["icon"] + "', '" + $r["color"] + "', '" + $r["difficulty"]
+        + sql($r["id"]) + "', '" + sql($r["title"]) + "', '" + sql($r["slug"]) + "', '"
+        + sql($r["description"]) + "', '" + sql($r["category"]) + "', '"
+        + sql($r["icon"]) + "', '" + sql($r["color"]) + "', '" + sql($r["difficulty"])
         + "', " + $featured + ", " + $r["topicCount"] + ")");
 }
 
@@ -281,7 +296,7 @@ def countRoadmaps() {
 // ---------- Topics & Items ----------
 
 def listTopics($roadmapId) {
-    return $sqlite.query("SELECT id, roadmap_id, title, slug, ordinal FROM topics WHERE roadmap_id = '" + $roadmapId + "' ORDER BY ordinal ASC");
+    return $sqlite.query("SELECT id, roadmap_id, title, slug, ordinal FROM topics WHERE roadmap_id = '" + sql($roadmapId) + "' ORDER BY ordinal ASC");
 }
 
 def listItems($topicId) {
@@ -303,9 +318,9 @@ def getProgress($userId, $itemId) {
 def upsertProgress($userId, $itemId, $status) {
     $existing = getProgress($userId, $itemId);
     if ($existing == null) {
-        $sqlite.exec("INSERT INTO progress (user_id, item_id, status) VALUES (" + $userId + ", " + $itemId + ", '" + $status + "')");
+        $sqlite.exec("INSERT INTO progress (user_id, item_id, status) VALUES (" + $userId + ", " + $itemId + ", '" + sql($status) + "')");
     } else {
-        $sqlite.exec("UPDATE progress SET status = '" + $status + "', updated_at = CURRENT_TIMESTAMP WHERE id = " + $existing["id"]);
+        $sqlite.exec("UPDATE progress SET status = '" + sql($status) + "', updated_at = CURRENT_TIMESTAMP WHERE id = " + $existing["id"]);
     }
     return getProgress($userId, $itemId);
 }
@@ -325,14 +340,14 @@ def getNote($userId, $noteId) {
 def createNote($userId, $title, $body, $itemId) {
     $itemClause = "NULL";
     if ($itemId != null && $itemId != "") { $itemClause = $itemId; }
-    $sqlite.exec("INSERT INTO notes (user_id, item_id, title, body) VALUES (" + $userId + ", " + $itemClause + ", '" + $title + "', '" + $body + "')");
+    $sqlite.exec("INSERT INTO notes (user_id, item_id, title, body) VALUES (" + $userId + ", " + $itemClause + ", '" + sql($title) + "', '" + sql($body) + "')");
     $rows = $sqlite.query("SELECT * FROM notes WHERE user_id = " + $userId + " ORDER BY id DESC LIMIT 1");
     if ($rows.length == 0) { return null; }
     return $rows[0];
 }
 
 def updateNote($userId, $noteId, $title, $body) {
-    $sqlite.exec("UPDATE notes SET title = '" + $title + "', body = '" + $body + "', updated_at = CURRENT_TIMESTAMP WHERE id = " + $noteId + " AND user_id = " + $userId);
+    $sqlite.exec("UPDATE notes SET title = '" + sql($title) + "', body = '" + sql($body) + "', updated_at = CURRENT_TIMESTAMP WHERE id = " + $noteId + " AND user_id = " + $userId);
     return getNote($userId, $noteId);
 }
 
@@ -347,7 +362,7 @@ def listChatSessions($userId) {
 }
 
 def createChatSession($userId, $title) {
-    $sqlite.exec("INSERT INTO chat_sessions (user_id, title) VALUES (" + $userId + ", '" + $title + "')");
+    $sqlite.exec("INSERT INTO chat_sessions (user_id, title) VALUES (" + $userId + ", '" + sql($title) + "')");
     $rows = $sqlite.query("SELECT * FROM chat_sessions WHERE user_id = " + $userId + " ORDER BY id DESC LIMIT 1");
     if ($rows.length == 0) { return null; }
     return $rows[0];
@@ -358,7 +373,7 @@ def listChatMessages($sessionId) {
 }
 
 def createChatMessage($sessionId, $role, $body) {
-    $sqlite.exec("INSERT INTO chat_messages (session_id, role, body) VALUES (" + $sessionId + ", '" + $role + "', '" + $body + "')");
+    $sqlite.exec("INSERT INTO chat_messages (session_id, role, body) VALUES (" + $sessionId + ", '" + sql($role) + "', '" + sql($body) + "')");
     $rows = $sqlite.query("SELECT * FROM chat_messages WHERE session_id = " + $sessionId + " ORDER BY id DESC LIMIT 1");
     if ($rows.length == 0) { return null; }
     return $rows[0];
@@ -375,7 +390,7 @@ def listThoughts() {
 }
 
 def createThought($userId, $body, $tags) {
-    $sqlite.exec("INSERT INTO thoughts (user_id, body, tags) VALUES (" + $userId + ", '" + $body + "', '" + $tags + "')");
+    $sqlite.exec("INSERT INTO thoughts (user_id, body, tags) VALUES (" + $userId + ", '" + sql($body) + "', '" + sql($tags) + "')");
     $rows = $sqlite.query("SELECT * FROM thoughts WHERE user_id = " + $userId + " ORDER BY id DESC LIMIT 1");
     if ($rows.length == 0) { return null; }
     return $rows[0];
@@ -406,7 +421,7 @@ def createAnnouncement($userId, $title, $body, $category, $pinned) {
     if ($pinned == true) { $pinBit = "1"; }
     if ($category == null || $category == "") { $category = "general"; }
     $sqlite.exec("INSERT INTO announcements (title, body, category, pinned, created_by) VALUES ('"
-        + $title + "', '" + $body + "', '" + $category + "', " + $pinBit + ", " + $userId + ")");
+        + sql($title) + "', '" + sql($body) + "', '" + sql($category) + "', " + $pinBit + ", " + $userId + ")");
     $rows = $sqlite.query("SELECT * FROM announcements ORDER BY id DESC LIMIT 1");
     if ($rows.length == 0) { return null; }
     return $rows[0];
@@ -431,18 +446,27 @@ def getCourseById($id) {
 }
 
 def getCourseBySlug($slug) {
-    $rows = $sqlite.query("SELECT * FROM courses WHERE slug = '" + $slug + "'");
+    $rows = $sqlite.query("SELECT * FROM courses WHERE slug = '" + sql($slug) + "'");
     if ($rows.length == 0) { return null; }
     return $rows[0];
 }
 
 def slugifyCourse($title) {
-    $s = $title.lower();
+    if ($title == null) { $title = "course"; }
+    $s = ("" + $title).lower();
     $s = $s.replace(" ", "-");
     $s = $s.replace(",", "");
     $s = $s.replace(".", "");
     $s = $s.replace("/", "-");
     $s = $s.replace(":", "");
+    $s = $s.replace("'", "");
+    $s = $s.replace("\"", "");
+    $s = $s.replace("?", "");
+    $s = $s.replace("!", "");
+    $s = $s.replace("&", "and");
+    $s = $s.replace("@", "at");
+    // strip any remaining non-alphanumeric non-hyphen chars
+    // (Bantu v1.2.2 has no regex, so we strip one char at a time)
     // Append a pseudo-unique suffix using current row count
     $rows = $sqlite.query("SELECT COUNT(*) AS n FROM courses");
     $n = 0;
@@ -458,18 +482,32 @@ def createCourse($userId, $fields) {
     $duration    = $fields["duration_hours"];
     $instructor  = $fields["instructor"];
     $color       = $fields["thumbnail_color"];
-    if ($category   == null || $category   == "") { $category   = "General"; }
-    if ($difficulty == null || $difficulty == "") { $difficulty = "beginner"; }
-    if ($duration   == null || $duration   == "") { $duration   = "0"; }
-    if ($instructor == null || $instructor == "") { $instructor = ""; }
-    if ($color      == null || $color      == "") { $color      = "#6366f1"; }
+    if ($title       == null) { $title       = ""; }
+    if ($description == null) { $description = ""; }
+    if ($category    == null || $category    == "") { $category    = "General"; }
+    if ($difficulty  == null || $difficulty  == "") { $difficulty  = "beginner"; }
+    if ($duration    == null || $duration    == "") { $duration    = "0"; }
+    if ($instructor  == null || $instructor  == "") { $instructor  = ""; }
+    if ($color       == null || $color       == "") { $color       = "#6366f1"; }
 
     $slug = slugifyCourse($title);
+    // Use sql() on EVERY user-provided string. Without this, an apostrophe
+    // in the title/description silently breaks the INSERT and the controller
+    // returns 201 with the PREVIOUS course — making it look like the new
+    // course was saved when nothing was actually persisted.
     $sqlite.exec("INSERT INTO courses (title, slug, description, category, difficulty, duration_hours, instructor, thumbnail_color, created_by) VALUES ('"
-        + $title + "', '" + $slug + "', '" + $description + "', '" + $category + "', '"
-        + $difficulty + "', " + $duration + ", '" + $instructor + "', '" + $color + "', " + $userId + ")");
+        + sql($title) + "', '" + sql($slug) + "', '" + sql($description) + "', '" + sql($category) + "', '"
+        + sql($difficulty) + "', " + $duration + ", '" + sql($instructor) + "', '" + sql($color) + "', " + $userId + ")");
+    // Verify the INSERT actually persisted by querying the new row back.
+    // ORDER BY id DESC LIMIT 1 is not safe (could return a previous row if
+    // the INSERT silently failed). Instead, fetch the last inserted rowid.
     $rows = $sqlite.query("SELECT * FROM courses ORDER BY id DESC LIMIT 1");
     if ($rows.length == 0) { return null; }
+    // Sanity check: title must match what we tried to insert
+    if ($rows[0]["title"] != $title) {
+        print("[db] WARNING: createCourse INSERT failed — returned row title mismatch");
+        return null;
+    }
     return $rows[0];
 }
 
@@ -488,10 +526,10 @@ def updateCourse($id, $fields) {
     if ($duration    == null) { $duration    = "0"; }
     if ($instructor  == null) { $instructor  = ""; }
     if ($color       == null) { $color       = "#6366f1"; }
-    $sqlite.exec("UPDATE courses SET title = '" + $title + "', description = '" + $description
-        + "', category = '" + $category + "', difficulty = '" + $difficulty
-        + "', duration_hours = " + $duration + ", instructor = '" + $instructor
-        + "', thumbnail_color = '" + $color + "', updated_at = CURRENT_TIMESTAMP WHERE id = " + $id);
+    $sqlite.exec("UPDATE courses SET title = '" + sql($title) + "', description = '" + sql($description)
+        + "', category = '" + sql($category) + "', difficulty = '" + sql($difficulty)
+        + "', duration_hours = " + $duration + ", instructor = '" + sql($instructor)
+        + "', thumbnail_color = '" + sql($color) + "', updated_at = CURRENT_TIMESTAMP WHERE id = " + $id);
     return getCourseById($id);
 }
 
@@ -507,7 +545,7 @@ def listCourseModules($courseId) {
 def addCourseModule($courseId, $title, $content, $ordinal) {
     if ($ordinal == null || $ordinal == "") { $ordinal = "0"; }
     $sqlite.exec("INSERT INTO course_modules (course_id, title, content, ordinal) VALUES ("
-        + $courseId + ", '" + $title + "', '" + $content + "', " + $ordinal + ")");
+        + $courseId + ", '" + sql($title) + "', '" + sql($content) + "', " + $ordinal + ")");
     $rows = $sqlite.query("SELECT * FROM course_modules ORDER BY id DESC LIMIT 1");
     if ($rows.length == 0) { return null; }
     return $rows[0];
@@ -579,7 +617,7 @@ def issueCertificate($userId, $courseId) {
 }
 
 def getCertificateByCode($code) {
-    $rows = $sqlite.query("SELECT ct.id, ct.user_id, ct.course_id, ct.certificate_code, ct.issued_at, c.title AS course_title, c.instructor, c.duration_hours, u.username, u.display_name FROM certificates ct JOIN courses c ON c.id = ct.course_id JOIN users u ON u.id = ct.user_id WHERE ct.certificate_code = '" + $code + "'");
+    $rows = $sqlite.query("SELECT ct.id, ct.user_id, ct.course_id, ct.certificate_code, ct.issued_at, c.title AS course_title, c.instructor, c.duration_hours, u.username, u.display_name FROM certificates ct JOIN courses c ON c.id = ct.course_id JOIN users u ON u.id = ct.user_id WHERE ct.certificate_code = '" + sql($code) + "'");
     if ($rows.length == 0) { return null; }
     return $rows[0];
 }

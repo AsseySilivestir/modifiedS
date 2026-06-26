@@ -40,6 +40,11 @@ def createOne($req, $res) {
         return null;
     }
     $t = createThought($user["id"], $body, $tags);
+    if ($t == null) {
+        $res.status(500);
+        $res.json({ "error": "Failed to post thought — try removing special characters" });
+        return null;
+    }
     $res.status(201);
     $res.json({ "thought": $t, "author": { "username": $user["username"], "display_name": $user["display_name"], "avatar_url": $user["avatar_url"] } });
 }
@@ -104,6 +109,11 @@ def createAnn($req, $res) {
         return null;
     }
     $a = createAnnouncement($user["id"], $title, $body, $category, $pinned);
+    if ($a == null) {
+        $res.status(500);
+        $res.json({ "error": "Failed to post announcement — try removing special characters" });
+        return null;
+    }
     $res.status(201);
     $res.json({ "announcement": $a });
 }

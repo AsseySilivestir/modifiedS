@@ -58,6 +58,11 @@ def createOne($req, $res) {
         return null;
     }
     $c = createCourse($user["id"], $req.body);
+    if ($c == null) {
+        $res.status(500);
+        $res.json({ "error": "Failed to create course — check server logs (often caused by special characters in title/description)" });
+        return null;
+    }
     $res.status(201);
     $res.json({ "course": $c });
 }
