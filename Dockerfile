@@ -88,8 +88,19 @@ RUN echo "=== ldd /usr/local/bin/bantu ===" \
     && /usr/local/bin/bantu --version
 
 # ─── Application code ───────────────────────────────────────────────
-# Copy Bantu modules + manifest + static frontend.
-COPY server.b db.b seed.b auth.b roadmaps.b progress.b notes.b ai.b routes.b bantu.json ./
+# Copy ALL Bantu modules + manifest + static frontend.
+#
+# IMPORTANT: every `*.b` file in the repo is `include`-d by server.b at
+# boot time. If any one is missing from the image, Bantu's `include`
+# silently sets the namespace to `null` and every request to a route
+# handled by that module crashes with:
+#     [REFERENCE ERROR] Undefined variable: <module>
+#     [RUNTIME ERROR] Cannot call non-function value
+# Using `*.b` (instead of an explicit list) makes this future-proof —
+# any new module added to the repo is automatically included in the
+# image without touching the Dockerfile.
+COPY server.b db.b seed.b auth.b roadmaps.b progress.b notes.b ai.b \
+     routes.b courses.b community.b certificates.b bantu.json ./
 COPY public/ ./public/
 
 # Render mounts a persistent disk at /data for SQLite. World-writable
