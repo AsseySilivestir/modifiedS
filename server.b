@@ -32,6 +32,7 @@ include "./ai.b"       as ai;      // ai.tutor / ai.quiz
 include "./community.b" as community; // thoughts + announcements
 include "./courses.b"  as courses; // course catalog + enrollments + modules
 include "./certificates.b" as certificates; // list + printable HTML view
+include "./admin_applications.b" as admin_apps; // apply → vet → promote flow
 include "./routes.b" as routes;    // routes.registerAll(sua)
 
 // 2. Initialize SQLite

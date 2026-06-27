@@ -200,6 +200,26 @@ def initDb() {
         + "issued_at TEXT DEFAULT CURRENT_TIMESTAMP, "
         + "UNIQUE(user_id, course_id))");
 
+    // Admin applications — regular users apply, existing admins vet.
+    //   status: pending | approved | rejected | withdrawn
+    //   A user may have only ONE pending application at a time
+    //   (enforced by the controller, not the schema, so they can re-apply
+    //    after a rejection or withdrawal).
+    $sqlite.exec("CREATE TABLE IF NOT EXISTS admin_applications ("
+        + "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        + "user_id INTEGER NOT NULL, "
+        + "reason TEXT NOT NULL DEFAULT '', "
+        + "experience TEXT NOT NULL DEFAULT '', "
+        + "status TEXT NOT NULL DEFAULT 'pending', "
+        + "applied_at TEXT DEFAULT CURRENT_TIMESTAMP, "
+        + "reviewed_by INTEGER, "
+        + "reviewed_at TEXT, "
+        + "review_note TEXT DEFAULT '', "
+        + "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE, "
+        + "FOREIGN KEY (reviewed_by) REFERENCES users(id) ON DELETE SET NULL)");
+    $sqlite.exec("CREATE INDEX IF NOT EXISTS idx_admin_apps_status ON admin_applications(status)");
+    $sqlite.exec("CREATE INDEX IF NOT EXISTS idx_admin_apps_user ON admin_applications(user_id)");
+
     // Promote the very first user to admin (idempotent — only if no admin exists yet)
     $adminCheck = $sqlite.query("SELECT id FROM users WHERE role = 'admin' LIMIT 1");
     if ($adminCheck.length == 0) {
@@ -210,7 +230,7 @@ def initDb() {
         }
     }
 
-    print("[db] initialized — 14 tables ready (users, roadmaps, topics, items, progress, notes, chat, courses, modules, enrollments, announcements, thoughts, thought_likes, certificates)");
+    print("[db] initialized — 15 tables ready (users, roadmaps, topics, items, progress, notes, chat, courses, modules, enrollments, announcements, thoughts, thought_likes, certificates, admin_applications)");
 }
 
 // ---------- Users ----------
@@ -379,7 +399,7 @@ def createChatMessage($sessionId, $role, $body) {
     return $rows[0];
 }
 
-print("[db] module loaded — initDb + helpers for users, roadmaps, topics, items, progress, notes, chat, courses, announcements, thoughts, certificates");
+print("[db] module loaded — initDb + helpers for users, roadmaps, topics, items, progress, notes, chat, courses, announcements, thoughts, certificates, admin_applications");
 
 // ============================================================================
 // Community: thoughts + announcements
@@ -620,4 +640,96 @@ def getCertificateByCode($code) {
     $rows = $sqlite.query("SELECT ct.id, ct.user_id, ct.course_id, ct.certificate_code, ct.issued_at, c.title AS course_title, c.instructor, c.duration_hours, u.username, u.display_name FROM certificates ct JOIN courses c ON c.id = ct.course_id JOIN users u ON u.id = ct.user_id WHERE ct.certificate_code = '" + sql($code) + "'");
     if ($rows.length == 0) { return null; }
     return $rows[0];
+}
+
+// ============================================================================
+// Admin applications
+// ----------------------------------------------------------------------------
+//   Regular users (role='student') apply by submitting reason + experience.
+//   Existing admins (role='admin') vet:
+//     - approve  → user's role flipped to 'admin', app status = 'approved'
+//     - reject   → app status = 'rejected', user stays 'student'
+//   A user may have only ONE pending application at a time. Withdrawing or
+//   rejecting the current one frees them to apply again.
+// ============================================================================
+
+// Returns the user's most recent application (any status), or null.
+def getMyLatestAdminApplication($userId) {
+    $rows = $sqlite.query("SELECT id, user_id, reason, experience, status, applied_at, reviewed_by, reviewed_at, review_note FROM admin_applications WHERE user_id = " + $userId + " ORDER BY id DESC LIMIT 1");
+    if ($rows.length == 0) { return null; }
+    return $rows[0];
+}
+
+// Returns true if the user already has a pending application.
+def hasPendingAdminApplication($userId) {
+    $rows = $sqlite.query("SELECT id FROM admin_applications WHERE user_id = " + $userId + " AND status = 'pending' LIMIT 1");
+    return $rows.length > 0;
+}
+
+// Submit a new application. Caller must verify the user is NOT already an
+// admin and does NOT have a pending application.
+def submitAdminApplication($userId, $reason, $experience) {
+    if ($reason == null)     { $reason = ""; }
+    if ($experience == null) { $experience = ""; }
+    $sqlite.exec("INSERT INTO admin_applications (user_id, reason, experience, status) VALUES ("
+        + $userId + ", '" + sql($reason) + "', '" + sql($experience) + "', 'pending')");
+    return getMyLatestAdminApplication($userId);
+}
+
+// Withdraw the user's currently-pending application (if any).
+def withdrawMyAdminApplication($userId) {
+    $sqlite.exec("UPDATE admin_applications SET status = 'withdrawn', reviewed_at = CURRENT_TIMESTAMP WHERE user_id = " + $userId + " AND status = 'pending'");
+    return getMyLatestAdminApplication($userId);
+}
+
+// List ALL applications (admin only). Optional status filter.
+//   $status = "pending" | "approved" | "rejected" | "withdrawn" | "all"
+// NOTE: Bantu v1.2.2 has a bug where calling sql($status) inside this
+// function returns the literal string "null" instead of the escaped
+// value. We inline the escaping (status.replace("'", "''")) to work
+// around it. The status value is constrained to a fixed set of
+// literals by the controller, so SQL injection is not a concern here.
+def listAdminApplications($status) {
+    $sql = "SELECT a.id, a.user_id, a.reason, a.experience, a.status, a.applied_at, a.reviewed_by, a.reviewed_at, a.review_note, u.username, u.display_name, u.email, u.created_at AS user_joined FROM admin_applications a JOIN users u ON u.id = a.user_id";
+    if ($status != null && $status != "" && $status != "all") {
+        $escaped = $status.replace("'", "''");
+        $sql = $sql + " WHERE a.status = '" + $escaped + "'";
+    }
+    $sql = $sql + " ORDER BY a.id DESC";
+    return $sqlite.query($sql);
+}
+
+// Approve an application: flips user's role to admin, marks app approved.
+// Returns the updated application row, or null if not found / not pending.
+def approveAdminApplication($appId, $reviewerId, $note) {
+    $rows = $sqlite.query("SELECT user_id FROM admin_applications WHERE id = " + $appId + " AND status = 'pending'");
+    if ($rows.length == 0) { return null; }
+    $applicantId = $rows[0]["user_id"];
+    if ($note == null) { $note = ""; }
+    $sqlite.exec("UPDATE admin_applications SET status = 'approved', reviewed_by = " + $reviewerId + ", reviewed_at = CURRENT_TIMESTAMP, review_note = '" + sql($note) + "' WHERE id = " + $appId);
+    // Promote the applicant to admin
+    $sqlite.exec("UPDATE users SET role = 'admin' WHERE id = " + $applicantId);
+    print("[db] admin application #" + $appId + " approved — user #" + $applicantId + " promoted to admin by user #" + $reviewerId);
+    $rows2 = $sqlite.query("SELECT id, user_id, reason, experience, status, applied_at, reviewed_by, reviewed_at, review_note FROM admin_applications WHERE id = " + $appId);
+    if ($rows2.length == 0) { return null; }
+    return $rows2[0];
+}
+
+// Reject an application: marks app rejected, user stays student.
+def rejectAdminApplication($appId, $reviewerId, $note) {
+    $rows = $sqlite.query("SELECT user_id FROM admin_applications WHERE id = " + $appId + " AND status = 'pending'");
+    if ($rows.length == 0) { return null; }
+    if ($note == null) { $note = ""; }
+    $sqlite.exec("UPDATE admin_applications SET status = 'rejected', reviewed_by = " + $reviewerId + ", reviewed_at = CURRENT_TIMESTAMP, review_note = '" + sql($note) + "' WHERE id = " + $appId);
+    print("[db] admin application #" + $appId + " rejected by user #" + $reviewerId);
+    $rows2 = $sqlite.query("SELECT id, user_id, reason, experience, status, applied_at, reviewed_by, reviewed_at, review_note FROM admin_applications WHERE id = " + $appId);
+    if ($rows2.length == 0) { return null; }
+    return $rows2[0];
+}
+
+// Promote a user directly (admin-only, bypasses application flow).
+// Used by the admin applications panel's "promote existing user" shortcut.
+def promoteUserToAdmin($userId) {
+    $sqlite.exec("UPDATE users SET role = 'admin' WHERE id = " + $userId);
+    return getUserById($userId);
 }

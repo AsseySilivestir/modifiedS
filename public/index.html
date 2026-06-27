@@ -475,6 +475,21 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 24px 0; }
 .badge.int { background: var(--warn-bg); color: var(--warn); border: 1px solid var(--warn-border); }
 .badge.adv { background: var(--err-bg); color: var(--err); border: 1px solid var(--err-border); }
 .badge.brand { background: var(--info-bg); color: var(--info); border: 1px solid var(--info-border); }
+/* Admin application status badges */
+.badge-pending   { background: var(--warn-bg); color: var(--warn); border: 1px solid var(--warn-border); }
+.badge-approved  { background: var(--ok-bg);   color: var(--ok);   border: 1px solid var(--ok-border); }
+.badge-rejected  { background: var(--err-bg);  color: var(--err);  border: 1px solid var(--err-border); }
+.badge-withdrawn { background: var(--bg-muted); color: var(--text-muted); border: 1px solid var(--border); }
+
+/* Alerts (used on the Apply for Admin page) */
+.alert { padding: 12px 14px; border-radius: 8px; font-size: 14px; line-height: 1.5; }
+.alert-success { background: var(--ok-bg);   color: var(--ok);   border: 1px solid var(--ok-border); }
+.alert-error   { background: var(--err-bg);  color: var(--err);  border: 1px solid var(--err-border); }
+.alert-warning { background: var(--warn-bg); color: var(--warn); border: 1px solid var(--warn-border); }
+.alert-info    { background: var(--info-bg); color: var(--info); border: 1px solid var(--info-border); }
+.mt-1 { margin-top: 8px; }
+.mt-2 { margin-top: 16px; }
+.mt-3 { margin-top: 24px; }
 
 .chip {
   display: inline-flex;
@@ -1264,6 +1279,19 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 24px 0; }
 }
 .admin-row-main { flex: 1; min-width: 0; }
 .admin-row-main strong { font-size: 14px; }
+/* Stacked variant for richer rows (e.g. admin applications with notes) */
+.admin-row-stack { flex-direction: column; align-items: stretch; gap: 12px; }
+.admin-row-stack .admin-row-main { width: 100%; }
+.admin-row-actions {
+  display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+  padding-top: 8px; border-top: 1px dashed var(--border);
+}
+.admin-note-input {
+  flex: 1; min-width: 200px;
+  padding: 6px 10px; font-size: 13px;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg);
+}
 
 .stat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 14px; }
 .stat-card {
@@ -1306,6 +1334,7 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 24px 0; }
         <a href="#/certificates">Certificates</a>
         <a href="#/tutor">AI Tutor</a>
         <a href="#/notes">Notes</a>
+        <a href="#/apply-admin" id="nav-apply-admin-link" style="display:none">Apply for Admin</a>
         <a href="#/admin" id="nav-admin-link" style="display:none">Admin</a>
       </nav>
 
@@ -1658,6 +1687,14 @@ const api = {
 
   // Certificates
   certificates:    ()        => api.req('/certificates', { auth: true }),
+
+  // Admin applications
+  myAdminApp:           ()        => api.req('/admin-applications/me', { auth: true }),
+  submitAdminApp:       (b)       => api.req('/admin-applications', { method: 'POST', auth: true, body: b }),
+  withdrawAdminApp:     ()        => api.req('/admin-applications/me', { method: 'DELETE', auth: true }),
+  listAdminApps:        (status)  => api.req('/admin-applications' + (status ? '?status=' + encodeURIComponent(status) : ''), { auth: true }),
+  approveAdminApp:      (id, note)=> api.req('/admin-applications/' + id + '/approve', { method: 'POST', auth: true, body: { note } }),
+  rejectAdminApp:       (id, note)=> api.req('/admin-applications/' + id + '/reject',  { method: 'POST', auth: true, body: { note } }),
 };
 
 /* ─── 3. Auth ──────────────────────────────────────────────────────── */
@@ -1729,6 +1766,7 @@ const routes = [
   { path: /^\/community\/?$/,                 view: viewCommunity },
   { path: /^\/announcements\/?$/,             view: viewAnnouncements },
   { path: /^\/certificates\/?$/,              view: viewCertificates },
+  { path: /^\/apply-admin\/?$/,               view: viewApplyAdmin },
   { path: /^\/admin\/?$/,                     view: viewAdmin },
 ];
 
@@ -3388,6 +3426,157 @@ function sanitizeFilename(s) {
 }
 
 
+// ─── Apply for Admin ──────────────────────────────────────────────────
+// Regular users (role='student') fill out a short form explaining why
+// they want to be an admin. Existing admins see the application in the
+// Admin Panel → Applications tab and can approve or reject it.
+async function viewApplyAdmin(root) {
+  root.classList.add('view-apply-admin');
+  if (!requireAuth()) return;
+
+  // Admins don't need to apply
+  if (state.user && state.user.role === 'admin') {
+    root.appendChild(el('div', { class: 'page-head' },
+      el('h1', {}, 'You are already an admin'),
+      el('p', { class: 'muted' }, 'Visit the Admin Panel to manage the platform.'),
+      el('a', { class: 'btn', href: '#/admin' }, 'Go to Admin Panel'),
+    ));
+    return;
+  }
+
+  root.appendChild(el('div', { class: 'page-head' },
+    el('h1', {}, 'Apply to become an admin'),
+    el('p', {}, 'Admins can publish courses, post announcements, and review other applications. Fill out the form below — an existing admin will review your request.'),
+  ));
+
+  // Card: status of existing application
+  const statusCard = el('div', { class: 'card' });
+  root.appendChild(statusCard);
+
+  // Card: application form (or status, depending on existing app)
+  const formCard = el('div', { class: 'card mt-3' });
+  root.appendChild(formCard);
+
+  // Render a placeholder then load the user's existing application
+  statusCard.appendChild(el('p', { class: 'muted' }, 'Checking your application status…'));
+
+  let app = null;
+  try {
+    const d = await api.myAdminApp();
+    app = d.application || null;
+  } catch (e) {
+    statusCard.innerHTML = '';
+    statusCard.appendChild(el('div', { class: 'alert alert-error' }, 'Could not load application status: ' + e.message));
+    return;
+  }
+
+  // Render the status card
+  statusCard.innerHTML = '';
+  if (!app) {
+    statusCard.appendChild(el('h2', {}, 'No application yet'));
+    statusCard.appendChild(el('p', { class: 'muted' }, 'You have not applied to become an admin. Use the form below to submit your application.'));
+  } else {
+    const status = app.status || 'pending';
+    const badge = (s) => el('span', { class: 'badge badge-' + s }, s);
+    statusCard.appendChild(el('h2', {}, 'Your application #' + app.id + ' ', badge(status)));
+    statusCard.appendChild(el('p', {}, el('strong', {}, 'Submitted:'), ' ' + timeAgo(app.applied_at)));
+    if (app.reason) {
+      statusCard.appendChild(el('p', {}, el('strong', {}, 'Why you want to be admin:'), el('br'), document.createTextNode(app.reason)));
+    }
+    if (app.experience) {
+      statusCard.appendChild(el('p', {}, el('strong', {}, 'Your experience:'), el('br'), document.createTextNode(app.experience)));
+    }
+    if (status === 'approved') {
+      statusCard.appendChild(el('div', { class: 'alert alert-success mt-2' },
+        '✅ Your application was approved! You now have admin access.',
+        el('br'),
+        el('a', { class: 'btn btn-sm mt-1', href: '#/admin' }, 'Go to Admin Panel'),
+      ));
+      // Refresh the cached user object so role-aware nav links update.
+      refreshMe();
+    } else if (status === 'rejected') {
+      statusCard.appendChild(el('div', { class: 'alert alert-error mt-2' },
+        '❌ Your application was rejected.',
+        app.review_note && app.review_note !== 'null' ? ' Reviewer note: ' + app.review_note : '',
+        el('br'),
+        'You can submit a new application below.',
+      ));
+    } else if (status === 'withdrawn') {
+      statusCard.appendChild(el('div', { class: 'alert alert-warning mt-2' },
+        'You withdrew this application. You can submit a new one below.',
+      ));
+    } else if (status === 'pending') {
+      statusCard.appendChild(el('div', { class: 'alert alert-info mt-2' },
+        '⏳ Your application is awaiting review by an existing admin. You will be able to use the Admin Panel once approved.',
+      ));
+      const withdrawBtn = el('button', { class: 'btn btn-danger btn-sm mt-1' }, 'Withdraw application');
+      withdrawBtn.onclick = async () => {
+        if (!confirm('Withdraw your admin application? You can re-apply later.')) return;
+        withdrawBtn.disabled = true;
+        withdrawBtn.textContent = 'Withdrawing…';
+        try {
+          await api.withdrawAdminApp();
+          toast('Application withdrawn', 'success');
+          viewApplyAdmin(root);
+        } catch (e) {
+          toast(e.message, 'error');
+        } finally {
+          withdrawBtn.disabled = false;
+          withdrawBtn.textContent = 'Withdraw application';
+        }
+      };
+      statusCard.appendChild(withdrawBtn);
+    }
+  }
+
+  // Render the application form (only when no pending app exists)
+  formCard.innerHTML = '';
+  const canApply = !app || app.status === 'approved' || app.status === 'rejected' || app.status === 'withdrawn';
+  if (!canApply) {
+    formCard.appendChild(el('p', { class: 'muted' }, 'You already have a pending application. Withdraw it first if you want to submit a new one.'));
+    return;
+  }
+
+  formCard.appendChild(el('h2', {}, app && (app.status === 'rejected' || app.status === 'withdrawn') ? 'Submit a new application' : 'Submit your application'));
+
+  const f = el('form', { class: 'admin-form' });
+  const reasonInput = el('textarea', {
+    placeholder: 'Why do you want to be an admin? (e.g. "I want to publish a series of Python courses for beginners")',
+    rows: '4', required: '', maxlength: '2000',
+  });
+  const expInput = el('textarea', {
+    placeholder: 'Relevant experience (optional — e.g. teaching background, professional expertise, community moderation)',
+    rows: '3', maxlength: '2000',
+  });
+  const submit = el('button', { class: 'btn', type: 'submit' }, 'Submit application');
+
+  f.append(
+    el('div', { class: 'field' },
+      el('label', { class: 'field-label' }, 'Why do you want to be an admin? *'),
+      reasonInput,
+      el('div', { class: 'muted' }, 'Required. Max 2000 characters.'),
+    ),
+    el('div', { class: 'field' },
+      el('label', { class: 'field-label' }, 'Relevant experience'),
+      expInput,
+    ),
+    submit,
+  );
+  f.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!reasonInput.value.trim()) { toast('Please tell us why you want to be an admin', 'error'); return; }
+    submit.disabled = true; submit.textContent = 'Submitting…';
+    try {
+      await api.submitAdminApp({ reason: reasonInput.value.trim(), experience: expInput.value.trim() });
+      toast('Application submitted! An admin will review it.', 'success');
+      viewApplyAdmin(root);
+    } catch (err) { toast(err.message, 'error'); }
+    finally { submit.disabled = false; submit.textContent = 'Submit application'; }
+  });
+  formCard.appendChild(f);
+}
+
+
 async function viewAdmin(root) {
   root.classList.add('view-admin');
   if (!requireAuth()) return;
@@ -3396,20 +3585,22 @@ async function viewAdmin(root) {
     root.appendChild(el('div', { class: 'empty' },
       el('div', { class: 'empty-icon' }, '🚫'),
       el('h3', {}, 'Admin access required'),
-      el('p', {}, 'Only the first registered account (or promoted admins) can access this panel.'),
+      el('p', {}, 'Only admins can access this panel. The first registered account is automatically an admin.'),
+      el('a', { class: 'btn', href: '#/apply-admin' }, 'Apply to become an admin'),
     ));
     return;
   }
 
   root.appendChild(el('div', { class: 'page-head' },
     el('h1', {}, 'Admin Panel'),
-    el('p', {}, 'Publish courses, post announcements, and manage the community. The first user to register is automatically an admin.'),
+    el('p', {}, 'Publish courses, post announcements, manage the community, and vet admin applications. The first user to register is automatically an admin.'),
   ));
 
   // Tab bar
   const tabs = [
     { id: 'courses', label: 'Courses' },
     { id: 'announcements', label: 'Announcements' },
+    { id: 'applications', label: 'Applications' },
     { id: 'stats', label: 'Stats' },
   ];
   const tabBar = el('div', { class: 'tab-bar' });
@@ -3427,6 +3618,7 @@ async function viewAdmin(root) {
     panel.innerHTML = '';
     if (active === 'courses') panel.appendChild(renderCoursesAdmin());
     else if (active === 'announcements') panel.appendChild(renderAnnouncementsAdmin());
+    else if (active === 'applications') panel.appendChild(renderApplicationsAdmin());
     else if (active === 'stats') panel.appendChild(renderStatsAdmin());
   }
 
@@ -3548,6 +3740,93 @@ async function viewAdmin(root) {
       if ((d.announcements || []).length === 0) list.appendChild(el('p', { class: 'muted' }, 'No announcements yet.'));
       wrap.appendChild(list);
     }).catch(e => wrap.appendChild(viewError(e)));
+    return wrap;
+  }
+
+  function renderApplicationsAdmin() {
+    const wrap = el('div', { class: 'admin-section' });
+    wrap.appendChild(el('h2', {}, 'Admin applications'));
+    wrap.appendChild(el('p', { class: 'muted' }, 'Regular users who want to become admins must apply here. Approve to grant them admin access, or reject with a note explaining why.'));
+
+    // Status filter
+    const filterBar = el('div', { class: 'tab-bar' });
+    const filters = [
+      { id: 'pending',   label: 'Pending' },
+      { id: 'approved',  label: 'Approved' },
+      { id: 'rejected',  label: 'Rejected' },
+      { id: 'all',       label: 'All' },
+    ];
+    let activeFilter = 'pending';
+    const listHost = el('div', {});
+    function reload() {
+      listHost.innerHTML = '';
+      listHost.appendChild(el('p', { class: 'muted' }, 'Loading…'));
+      api.listAdminApps(activeFilter).then(d => {
+        listHost.innerHTML = '';
+        const apps = d.applications || [];
+        if (apps.length === 0) {
+          listHost.appendChild(el('p', { class: 'muted' }, 'No ' + activeFilter + ' applications.'));
+          return;
+        }
+        const list = el('div', { class: 'admin-list' });
+        apps.forEach(a => {
+          const isPending = a.status === 'pending';
+          const row = el('div', { class: 'admin-row admin-row-stack' },
+            el('div', { class: 'admin-row-main' },
+              el('div', {},
+                el('strong', {}, a.display_name || a.username || ('user #' + a.user_id)),
+                el('span', { class: 'muted' }, ' @' + (a.username || '?') + ' · ' + (a.email || '') + ' · joined ' + timeAgo(a.user_joined)),
+              ),
+              el('div', { class: 'mt-1' },
+                el('span', { class: 'badge badge-' + (a.status || 'pending') }, a.status || 'pending'),
+                ' · applied ' + timeAgo(a.applied_at),
+                a.reviewed_at ? ' · reviewed ' + timeAgo(a.reviewed_at) : '',
+              ),
+              a.reason ? el('div', { class: 'mt-1' }, el('strong', {}, 'Why:'), el('br'), document.createTextNode(a.reason)) : null,
+              a.experience ? el('div', { class: 'mt-1' }, el('strong', {}, 'Experience:'), el('br'), document.createTextNode(a.experience)) : null,
+              (a.review_note && a.review_note !== 'null' && a.review_note !== '') ? el('div', { class: 'mt-1' }, el('strong', {}, 'Reviewer note:'), el('br'), document.createTextNode(a.review_note)) : null,
+            ),
+          );
+          if (isPending) {
+            const actions = el('div', { class: 'admin-row-actions' });
+            const noteInput = el('input', { type: 'text', placeholder: 'Optional note for the applicant', class: 'admin-note-input' });
+            const approveBtn = el('button', { class: 'btn btn-sm' }, '✓ Approve');
+            const rejectBtn  = el('button', { class: 'btn btn-danger btn-sm' }, '✗ Reject');
+            approveBtn.onclick = async () => {
+              if (!confirm('Approve this application? The user will immediately become an admin.')) return;
+              approveBtn.disabled = true; rejectBtn.disabled = true;
+              approveBtn.textContent = 'Approving…';
+              try { await api.approveAdminApp(a.id, noteInput.value.trim()); toast('Application approved — user promoted to admin', 'success'); reload(); }
+              catch (e) { toast(e.message, 'error'); approveBtn.disabled = false; rejectBtn.disabled = false; approveBtn.textContent = '✓ Approve'; }
+            };
+            rejectBtn.onclick = async () => {
+              if (!confirm('Reject this application? The user will be able to apply again.')) return;
+              approveBtn.disabled = true; rejectBtn.disabled = true;
+              rejectBtn.textContent = 'Rejecting…';
+              try { await api.rejectAdminApp(a.id, noteInput.value.trim()); toast('Application rejected', 'success'); reload(); }
+              catch (e) { toast(e.message, 'error'); approveBtn.disabled = false; rejectBtn.disabled = false; rejectBtn.textContent = '✗ Reject'; }
+            };
+            actions.append(noteInput, approveBtn, rejectBtn);
+            row.appendChild(actions);
+          }
+          list.appendChild(row);
+        });
+        listHost.appendChild(list);
+      }).catch(e => listHost.appendChild(viewError(e)));
+    }
+    function renderFilter() {
+      filterBar.innerHTML = '';
+      for (const f of filters) {
+        const b = el('button', { class: 'tab-btn' + (activeFilter === f.id ? ' active' : ''), onclick: () => {
+          activeFilter = f.id; renderFilter(); reload();
+        }}, f.label);
+        filterBar.appendChild(b);
+      }
+    }
+    wrap.appendChild(filterBar);
+    wrap.appendChild(listHost);
+    renderFilter();
+    reload();
     return wrap;
   }
 
@@ -3744,10 +4023,15 @@ function renderNavActions() {
     wrap.appendChild(el('a', { class: 'btn btn-sm', href: '#/register' }, 'Sign up'));
   }
 
-  // Show or hide admin nav link based on role
+  // Show/hide admin-related nav links based on role
   const adminLink = document.getElementById('nav-admin-link');
   if (adminLink) {
     adminLink.style.display = (state.user && state.user.role === 'admin') ? '' : 'none';
+  }
+  const applyAdminLink = document.getElementById('nav-apply-admin-link');
+  if (applyAdminLink) {
+    // Show "Apply for Admin" only for logged-in non-admins
+    applyAdminLink.style.display = (state.user && state.user.role !== 'admin') ? '' : 'none';
   }
 }
 

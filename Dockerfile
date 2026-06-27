@@ -100,7 +100,7 @@ RUN echo "=== ldd /usr/local/bin/bantu ===" \
 # any new module added to the repo is automatically included in the
 # image without touching the Dockerfile.
 COPY server.b db.b seed.b auth.b roadmaps.b progress.b notes.b ai.b \
-     routes.b courses.b community.b certificates.b bantu.json ./
+     routes.b courses.b community.b certificates.b admin_applications.b bantu.json ./
 COPY public/ ./public/
 
 # Render mounts a persistent disk at /data for SQLite. World-writable

@@ -117,6 +117,14 @@ def enrProgress($req, $res) { courses.setProgress($req, $res); return null; }
 // ---- Certificates ----
 def certListMine($req, $res) { certificates.listMine($req, $res); return null; }
 
+// ---- Admin applications ----
+def appGetMine($req, $res)     { admin_apps.getMyApplication($req, $res); return null; }
+def appSubmit($req, $res)      { admin_apps.submitApplication($req, $res); return null; }
+def appWithdrawMine($req, $res){ admin_apps.withdrawMine($req, $res); return null; }
+def appListAll($req, $res)     { admin_apps.listAll($req, $res); return null; }
+def appApprove($req, $res)     { admin_apps.approve($req, $res); return null; }
+def appReject($req, $res)      { admin_apps.reject($req, $res); return null; }
+
 def registerAll($sua) {
     // ---- Health ----
     $sua.server.get("/api/health", healthHandler);
@@ -182,8 +190,17 @@ def registerAll($sua) {
     // ---- Certificates (auth list) ----
     $sua.server.get("/api/certificates",            certListMine);
 
-    print("[routes] registered 38 routes under /api/*");
+    // ---- Admin applications ----
+    // Regular users apply; existing admins vet.
+    $sua.server.get   ("/api/admin-applications/me",            appGetMine);
+    $sua.server.post  ("/api/admin-applications",               appSubmit);
+    $sua.server.delete("/api/admin-applications/me",            appWithdrawMine);
+    $sua.server.get   ("/api/admin-applications",               appListAll);
+    $sua.server.post  ("/api/admin-applications/:id/approve",   appApprove);
+    $sua.server.post  ("/api/admin-applications/:id/reject",    appReject);
+
+    print("[routes] registered 44 routes under /api/*");
     return null;
 }
 
-print("[routes] module loaded — registerAll(sua) wires 38 routes");
+print("[routes] module loaded — registerAll(sua) wires 44 routes");
