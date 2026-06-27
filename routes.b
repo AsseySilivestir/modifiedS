@@ -31,12 +31,16 @@
 
 // ---- Health ----
 def healthHandler($req, $res) {
+    $hasResend = "no";
+    $rk = env("RESEND_API_KEY");
+    if ($rk != null && $rk != "") { $hasResend = "yes"; }
     $res.json({
         "ok": true,
         "service": "modifiedS",
         "version": "1.0.0",
         "backend": "bantu-v1.2.2",
-        "runtime": "sua-http"
+        "runtime": "sua-http",
+        "resend_key_set": $hasResend
     });
     return null;
 }

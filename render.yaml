@@ -29,6 +29,10 @@ services:
         value: /data/modifiedS.db
       - key: NODE_ENV
         value: production
+      - key: RESEND_API_KEY
+        sync: false            # secret — set value in Render dashboard
+      - key: MAIL_FROM
+        value: "modifiedS <onboarding@resend.dev>"
     disk:
       name: modifiedS-data
       mountPath: /data
