@@ -63,6 +63,12 @@ def createOne($req, $res) {
         $res.json({ "error": "Failed to create course — check server logs (often caused by special characters in title/description)" });
         return null;
     }
+    trackEvent("course", "created", {
+        "id": $c["id"],
+        "title": $c["title"],
+        "category": $c["category"],
+        "actor": $user["username"]
+    });
     $res.status(201);
     $res.json({ "course": $c });
 }
@@ -210,6 +216,18 @@ def setProgress($req, $res) {
     $cert = null;
     if (floor(num($percent)) >= 100) {
         $cert = issueCertificate($user["id"], $courseId);
+        if ($cert != null) {
+            $course = getCourseById($courseId);
+            $courseTitle = "";
+            if ($course != null) { $courseTitle = $course["title"]; }
+            trackEvent("certificate", "issued", {
+                "id": $cert["id"],
+                "code": $cert["certificate_code"],
+                "course_id": $courseId,
+                "course_title": $courseTitle,
+                "actor": $user["username"]
+            });
+        }
     }
     $res.json({ "enrollment": $updated, "certificate": $cert });
 }

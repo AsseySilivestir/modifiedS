@@ -325,6 +325,14 @@ const api = {
   listAdminApps:        (status)  => api.req('/admin-applications' + (status ? '?status=' + encodeURIComponent(status) : ''), { auth: true }),
   approveAdminApp:      (id, note)=> api.req('/admin-applications/' + id + '/approve', { method: 'POST', auth: true, body: { note } }),
   rejectAdminApp:       (id, note)=> api.req('/admin-applications/' + id + '/reject',  { method: 'POST', auth: true, body: { note } }),
+
+  // Email verification (OTP)
+  sendOtp:     ()  => api.req('/auth/send-otp',      { method: 'POST', auth: true }),
+  verifyOtp:   (c) => api.req('/auth/verify-otp',    { method: 'POST', auth: true, body: { code: c } }),
+  verifyStatus:()  => api.req('/auth/verify-status', { auth: true }),
+
+  // Real-time events (short-poll every 5s)
+  events:      (since) => api.req('/events' + (since != null ? '?since=' + since : ''), { auth: true }),
 };
 
 /* ─── 3. Auth ──────────────────────────────────────────────────────── */
@@ -342,6 +350,7 @@ function saveAuth(token, user) {
   localStorage.setItem('ms_token', token);
   localStorage.setItem('ms_user', JSON.stringify(user));
   renderNavActions();
+  startEventPoller();
 }
 
 function clearAuth() {
@@ -350,6 +359,7 @@ function clearAuth() {
   localStorage.removeItem('ms_token');
   localStorage.removeItem('ms_user');
   renderNavActions();
+  stopEventPoller();
 }
 
 async function refreshMe() {
@@ -364,6 +374,88 @@ async function refreshMe() {
   } catch (e) {
     if (e.status === 401) clearAuth();
   }
+}
+
+/* ─── Real-time event poller ──────────────────────────────────────
+   Bantu v1.2.2 has no WebSocket/SSE support — we short-poll the events
+   endpoint every 5 seconds and show a toast for each new event. The
+   poller runs only while logged in, and uses api.req() (which serializes
+   through the global queue) so it never collides with user-driven calls. */
+let _eventsCursor = 0;     // last event id seen
+let _eventsTimer = null;
+let _eventsSeen = new Set(); // dedupe by id (belt-and-suspenders)
+
+function startEventPoller() {
+  if (_eventsTimer) return; // already running
+  // Bootstrap the cursor to latest_id so we don't get toast-spammed with
+  // every old event in the DB on first load.
+  api.events(0).then(j => {
+    if (j && j.latest_id != null) {
+      _eventsCursor = j.latest_id;
+      // Mark any events returned in the bootstrap as "seen" (no toast)
+      (j.events || []).forEach(e => _eventsSeen.add(e.id));
+    }
+  }).catch(() => { /* silent */ });
+  _eventsTimer = setInterval(pollEvents, 5000);
+}
+
+function stopEventPoller() {
+  if (_eventsTimer) {
+    clearInterval(_eventsTimer);
+    _eventsTimer = null;
+  }
+}
+
+async function pollEvents() {
+  if (!state.token) { stopEventPoller(); return; }
+  try {
+    const j = await api.events(_eventsCursor);
+    if (!j || !j.events) return;
+    for (const ev of j.events) {
+      if (_eventsSeen.has(ev.id)) continue;
+      _eventsSeen.add(ev.id);
+      showEventToast(ev);
+      if (ev.id > _eventsCursor) _eventsCursor = ev.id;
+    }
+    if (j.latest_id != null && j.latest_id > _eventsCursor) {
+      _eventsCursor = j.latest_id;
+    }
+  } catch (e) { /* silent — retry next tick */ }
+}
+
+function showEventToast(ev) {
+  let p = {};
+  try { p = JSON.parse(ev.payload || '{}'); } catch (_) {}
+  const icons = {
+    announcement: '📣',
+    course: '🎓',
+    thought: '💬',
+    admin_app: '🛡️',
+    certificate: '🏅',
+    system: '🔔',
+  };
+  const icon = icons[ev.type] || '🔔';
+  let msg = '';
+  if (ev.type === 'announcement' && ev.verb === 'created') {
+    msg = `New announcement: "${p.title || ''}"`;
+  } else if (ev.type === 'course' && ev.verb === 'created') {
+    msg = `New course: "${p.title || ''}"`;
+  } else if (ev.type === 'thought' && ev.verb === 'created') {
+    msg = `${p.actor || 'Someone'} posted: "${p.body || ''}"`;
+  } else if (ev.type === 'admin_app' && ev.verb === 'created') {
+    msg = `${p.actor || 'Someone'} applied to be an admin`;
+  } else if (ev.type === 'admin_app' && ev.verb === 'approved') {
+    msg = `Admin application #${p.id || ''} approved`;
+  } else if (ev.type === 'admin_app' && ev.verb === 'rejected') {
+    msg = `Admin application #${p.id || ''} rejected`;
+  } else if (ev.type === 'certificate' && ev.verb === 'issued') {
+    msg = `Certificate issued: "${p.course_title || ''}"`;
+  } else if (ev.type === 'system' && p.body) {
+    msg = p.body;
+  } else {
+    msg = `${ev.type} · ${ev.verb}`;
+  }
+  toast(`${icon} ${msg}`, ev.type === 'announcement' ? 'success' : '');
 }
 
 function requireAuth() {
@@ -398,6 +490,7 @@ const routes = [
   { path: /^\/certificates\/?$/,              view: viewCertificates },
   { path: /^\/apply-admin\/?$/,               view: viewApplyAdmin },
   { path: /^\/admin\/?$/,                     view: viewAdmin },
+  { path: /^\/verify-email\/?$/,              view: viewVerifyEmail },
 ];
 
 function currentPath() {
@@ -488,6 +581,9 @@ async function viewHome(root) {
   const totalTopics = state.roadmaps.reduce((s, r) => s + (r.topic_count || 0), 0);
 
   root.innerHTML = '';
+  // Unverified email banner (only shown if logged in + not verified)
+  const banner = unverifiedBanner();
+  if (banner) root.appendChild(banner);
   root.appendChild(
     el('section', { class: 'hero' },
       el('h1', {}, 'Learn anything, step by step.'),
@@ -2500,6 +2596,148 @@ function statCard(emoji, value, label) {
     el('div', { class: 'stat-label' }, label));
 }
 
+/* ── Verify Email (OTP) ──────────────────────────────────────────── */
+
+async function viewVerifyEmail(root) {
+  if (!requireAuth()) return;
+  // If already verified, redirect home.
+  if (state.user && state.user.is_email_verified) {
+    navigate('/');
+    return;
+  }
+
+  root.innerHTML = '';
+  const card = el('div', { class: 'card auth-card' });
+  card.appendChild(el('h1', {}, 'Verify your email'));
+  card.appendChild(el('p', { class: 'sub' },
+    'We\'ll send a 6-digit code to your email. Enter it below to verify your account.'));
+
+  const emailLine = state.user && state.user.email
+    ? el('div', { class: 'verify-email-line' },
+        'Sending to: ',
+        el('strong', {}, state.user.email))
+    : null;
+  if (emailLine) card.appendChild(emailLine);
+
+  const errBox = el('div', { class: 'field-error', style: 'margin-bottom:10px' });
+  const okBox  = el('div', { class: 'verify-info', style: 'margin-bottom:10px' });
+
+  // 6 separate digit inputs for nicer UX
+  const inputs = [];
+  const codeRow = el('div', { class: 'otp-input-row' });
+  for (let i = 0; i < 6; i++) {
+    const inp = el('input', {
+      type: 'text',
+      inputmode: 'numeric',
+      maxlength: '1',
+      class: 'otp-digit',
+      autocomplete: i === 0 ? 'one-time-code' : 'off',
+    });
+    inp.addEventListener('input', () => {
+      inp.value = inp.value.replace(/[^0-9]/g, '').slice(0, 1);
+      if (inp.value && i < 5) inputs[i + 1].focus();
+    });
+    inp.addEventListener('keydown', (e) => {
+      if (e.key === 'Backspace' && !inp.value && i > 0) inputs[i - 1].focus();
+      if (e.key === 'Enter') verifyBtn.click();
+    });
+    inp.addEventListener('paste', (e) => {
+      e.preventDefault();
+      const text = (e.clipboardData || window.clipboardData).getData('text');
+      const digits = text.replace(/[^0-9]/g, '').slice(0, 6).split('');
+      digits.forEach((d, idx) => { if (inputs[idx]) inputs[idx].value = d; });
+      if (inputs[digits.length]) inputs[digits.length].focus();
+      else if (digits.length === 6) verifyBtn.click();
+    });
+    inputs.push(inp);
+    codeRow.appendChild(inp);
+  }
+  card.appendChild(codeRow);
+
+  const btnRow = el('div', { class: 'flex gap-2', style: 'margin-top:12px' });
+  const verifyBtn = el('button', { class: 'btn btn-block btn-lg' }, 'Verify');
+  const resendBtn = el('button', { class: 'btn btn-ghost' }, 'Send code');
+
+  // Auto-send on first load (small delay so user sees the form fill in)
+  let codeRequested = false;
+  async function sendCode() {
+    errBox.textContent = '';
+    okBox.textContent = '';
+    resendBtn.disabled = true;
+    resendBtn.textContent = 'Sending…';
+    try {
+      const j = await api.sendOtp();
+      okBox.textContent = j.message || 'Code sent.';
+      if (j.dev_code) {
+        // Dev mode — show the code in a prominent box so the user can copy it
+        okBox.innerHTML = '';
+        okBox.appendChild(el('div', {}, j.message));
+        okBox.appendChild(el('div', { class: 'dev-code-box' }, 'DEV CODE: ', el('strong', {}, j.dev_code)));
+      }
+      codeRequested = true;
+      // focus first input
+      if (inputs[0]) inputs[0].focus();
+    } catch (e) {
+      errBox.textContent = e.message;
+    } finally {
+      resendBtn.disabled = false;
+      resendBtn.textContent = 'Resend code';
+    }
+  }
+
+  async function verify() {
+    errBox.textContent = '';
+    okBox.textContent = '';
+    const code = inputs.map(i => i.value).join('');
+    if (code.length !== 6) {
+      errBox.textContent = 'Enter all 6 digits.';
+      return;
+    }
+    verifyBtn.disabled = true;
+    verifyBtn.textContent = 'Verifying…';
+    try {
+      const j = await api.verifyOtp(code);
+      if (j.user) {
+        state.user = j.user;
+        localStorage.setItem('ms_user', JSON.stringify(j.user));
+        renderNavActions();
+      }
+      toast('Email verified! Welcome aboard.', 'success');
+      navigate('/');
+    } catch (e) {
+      errBox.textContent = e.message;
+      // Clear inputs on wrong code
+      inputs.forEach(i => i.value = '');
+      if (inputs[0]) inputs[0].focus();
+    } finally {
+      verifyBtn.disabled = false;
+      verifyBtn.textContent = 'Verify';
+    }
+  }
+
+  verifyBtn.onclick = verify;
+  resendBtn.onclick = sendCode;
+
+  btnRow.appendChild(verifyBtn);
+  btnRow.appendChild(resendBtn);
+  card.appendChild(errBox);
+  card.appendChild(okBox);
+  card.appendChild(btnRow);
+
+  card.appendChild(el('div', { class: 'auth-switch', style: 'margin-top:16px' },
+    'Wrong email? ',
+    el('a', { href: '#/login', onclick: () => { clearAuth(); } }, 'Log out'),
+    ' and register again.',
+  ));
+
+  root.appendChild(card);
+
+  // Auto-send the first code after a tiny delay (lets the DOM settle)
+  if (!codeRequested) {
+    setTimeout(sendCode, 200);
+  }
+}
+
 /* ── Login / Register ─────────────────────────────────────────────── */
 
 async function viewLogin(root) {
@@ -2547,7 +2785,14 @@ async function viewLogin(root) {
         });
         saveAuth(j.token, j.user);
         toast('Welcome, ' + (j.user.username || 'friend') + '!', 'success');
-        navigate('/');
+        // First-time registration: send them to verify-email so they set up OTP.
+        // If they're already verified (admin auto-verified on first-user case),
+        // skip and go straight home.
+        if (j.user && j.user.is_email_verified) {
+          navigate('/');
+        } else {
+          navigate('/verify-email');
+        }
       } catch (e) {
         errBox.textContent = e.message;
       } finally {
@@ -2642,10 +2887,15 @@ function renderNavActions() {
   if (!wrap) return;
   wrap.innerHTML = '';
   if (state.token && state.user) {
+    // Verified check / unverified dot next to username
+    const verifiedBadge = (state.user.is_email_verified)
+      ? el('span', { class: 'verify-check', title: 'Email verified' }, '✓')
+      : el('span', { class: 'unverified-dot', title: 'Email not verified — click to verify' });
     wrap.appendChild(
       el('a', { class: 'user-chip', href: '#/profile' },
         el('div', { class: 'avatar' }, initials(state.user.display_name || state.user.username || 'U')),
         state.user.username || 'Account',
+        verifiedBadge,
       )
     );
   } else {
@@ -2663,6 +2913,20 @@ function renderNavActions() {
     // Show "Apply for Admin" only for logged-in non-admins
     applyAdminLink.style.display = (state.user && state.user.role !== 'admin') ? '' : 'none';
   }
+}
+
+// Returns an "unverified email" banner element, or null if verified / not logged in.
+// Insert at the top of protected views to nudge users toward verification.
+function unverifiedBanner() {
+  if (!state.user) return null;
+  if (state.user.is_email_verified) return null;
+  return el('div', { class: 'unverified-banner' },
+    el('div', { class: 'unverified-banner-icon' }, '⚠️'),
+    el('div', { class: 'unverified-banner-text' },
+      'Your email isn\'t verified yet. Some features are locked until you verify. ',
+      el('a', { href: '#/verify-email' }, 'Verify now →'),
+    ),
+  );
 }
 
 /* ─── 6. Boot ─────────────────────────────────────────────────────── */
@@ -2686,7 +2950,10 @@ function boot() {
 
   // Background refresh of user (validates token) — serialized through
   // api.req() so it does not run concurrently with router's API calls.
-  if (state.token) refreshMe();
+  if (state.token) {
+    refreshMe();
+    startEventPoller();
+  }
 }
 
 document.addEventListener('DOMContentLoaded', () => {

@@ -75,6 +75,11 @@ def submitApplication($req, $res) {
         return null;
     }
     $app = submitAdminApplication($user["id"], $reason, $experience);
+    trackEvent("admin_app", "created", {
+        "id": $app["id"],
+        "actor": $user["username"],
+        "body": "submitted admin application"
+    });
     $res.status(201);
     $res.json({ "application": $app });
 }
@@ -133,6 +138,11 @@ def approve($req, $res) {
         $res.json({ "error": "Application not found or already reviewed" });
         return null;
     }
+    trackEvent("admin_app", "approved", {
+        "id": $appId,
+        "actor": $user["username"],
+        "body": "approved admin application #" + $appId
+    });
     $res.json({ "application": $app });
 }
 
@@ -156,6 +166,11 @@ def reject($req, $res) {
         $res.json({ "error": "Application not found or already reviewed" });
         return null;
     }
+    trackEvent("admin_app", "rejected", {
+        "id": $appId,
+        "actor": $user["username"],
+        "body": "rejected admin application #" + $appId
+    });
     $res.json({ "application": $app });
 }
 

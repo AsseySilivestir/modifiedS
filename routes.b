@@ -125,6 +125,14 @@ def appListAll($req, $res)     { admin_apps.listAll($req, $res); return null; }
 def appApprove($req, $res)     { admin_apps.approve($req, $res); return null; }
 def appReject($req, $res)      { admin_apps.reject($req, $res); return null; }
 
+// ---- Email verification (OTP) ----
+def otpSend($req, $res)   { otp.sendOtp($req, $res);  return null; }
+def otpVerify($req, $res) { otp.verifyOtp($req, $res); return null; }
+def otpStatus($req, $res) { otp.status($req, $res);    return null; }
+
+// ---- Real-time events (short-poll) ----
+def evList($req, $res) { realtime.events($req, $res); return null; }
+
 def registerAll($sua) {
     // ---- Health ----
     $sua.server.get("/api/health", healthHandler);
@@ -199,8 +207,18 @@ def registerAll($sua) {
     $sua.server.post  ("/api/admin-applications/:id/approve",   appApprove);
     $sua.server.post  ("/api/admin-applications/:id/reject",    appReject);
 
-    print("[routes] registered 44 routes under /api/*");
+    // ---- Email verification (OTP) ----
+    // Auth required for all three. User registers → is_email_verified=0 →
+    // sends OTP → submits code → is_email_verified=1.
+    $sua.server.post("/api/auth/send-otp",      otpSend);
+    $sua.server.post("/api/auth/verify-otp",    otpVerify);
+    $sua.server.get ("/api/auth/verify-status", otpStatus);
+
+    // ---- Real-time events (short-poll, 5s on frontend) ----
+    $sua.server.get("/api/events", evList);
+
+    print("[routes] registered 48 routes under /api/*");
     return null;
 }
 
-print("[routes] module loaded — registerAll(sua) wires 44 routes");
+print("[routes] module loaded — registerAll(sua) wires 48 routes");

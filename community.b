@@ -45,6 +45,13 @@ def createOne($req, $res) {
         $res.json({ "error": "Failed to post thought — try removing special characters" });
         return null;
     }
+    $snippet = $body;
+    if ($snippet.length > 80) { $snippet = $snippet.substr(0, 80) + "…"; }
+    trackEvent("thought", "created", {
+        "id": $t["id"],
+        "body": $snippet,
+        "actor": $user["username"]
+    });
     $res.status(201);
     $res.json({ "thought": $t, "author": { "username": $user["username"], "display_name": $user["display_name"], "avatar_url": $user["avatar_url"] } });
 }
@@ -114,6 +121,12 @@ def createAnn($req, $res) {
         $res.json({ "error": "Failed to post announcement — try removing special characters" });
         return null;
     }
+    trackEvent("announcement", "created", {
+        "id": $a["id"],
+        "title": $a["title"],
+        "category": $a["category"],
+        "actor": $user["username"]
+    });
     $res.status(201);
     $res.json({ "announcement": $a });
 }

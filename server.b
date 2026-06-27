@@ -33,6 +33,8 @@ include "./community.b" as community; // thoughts + announcements
 include "./courses.b"  as courses; // course catalog + enrollments + modules
 include "./certificates.b" as certificates; // list + printable HTML view
 include "./admin_applications.b" as admin_apps; // apply → vet → promote flow
+include "./otp.b"           as otp;             // email verification via Resend OTP
+include "./realtime.b"      as realtime;        // GET /api/events (short-poll)
 include "./routes.b" as routes;    // routes.registerAll(sua)
 
 // 2. Initialize SQLite

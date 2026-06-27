@@ -220,17 +220,65 @@ def initDb() {
     $sqlite.exec("CREATE INDEX IF NOT EXISTS idx_admin_apps_status ON admin_applications(status)");
     $sqlite.exec("CREATE INDEX IF NOT EXISTS idx_admin_apps_user ON admin_applications(user_id)");
 
+    // ---- Real-time event bus (polled by frontend every 5s) ----
+    // Insert-only table. Each row is one "something happened" notification.
+    // Frontend calls GET /api/events?since=<lastId> and gets everything newer.
+    //   type    — 'announcement' | 'course' | 'thought' | 'admin_app' | 'certificate' | 'system'
+    //   verb    — 'created' | 'approved' | 'rejected' | 'withdrawn' | 'issued'
+    //   payload — JSON string (title, body snippet, actor username, etc.)
+    // We prune events older than 7 days on each boot to keep the table small
+    // (Bantu has no background cron — boot-time cleanup is the simplest option).
+    $sqlite.exec("CREATE TABLE IF NOT EXISTS events ("
+        + "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        + "type TEXT NOT NULL, "
+        + "verb TEXT NOT NULL DEFAULT 'created', "
+        + "payload TEXT NOT NULL DEFAULT '{}', "
+        + "created_at TEXT DEFAULT CURRENT_TIMESTAMP)");
+    $sqlite.exec("CREATE INDEX IF NOT EXISTS idx_events_id ON events(id)");
+    $sqlite.exec("DELETE FROM events WHERE created_at < datetime('now','-7 days')");
+    print("[db] pruned events older than 7 days");
+
+    // ---- Email verification (OTP) columns ----
+    // Added in v1.2 — SQLite has no "ADD COLUMN IF NOT EXISTS", so we probe
+    // PRAGMA table_info() first. Idempotent: skips if already present.
+    //
+    //   is_email_verified  INTEGER DEFAULT 0   — 1 once user verifies email
+    //   otp_code           TEXT                 — 6-digit code (NULL when none pending)
+    //   otp_expires_at     TEXT                 — ISO timestamp; code invalid after this
+    //   otp_attempts       INTEGER DEFAULT 0    — brute-force counter (max 5)
+    //
+    // The first registered user is auto-admin (see below) and is also auto-
+    // verified (no email roundtrip needed for the bootstrap admin).
+    $cols = $sqlite.query("PRAGMA table_info(users)");
+    $hasVerified = false;
+    $hasOtp      = false;
+    $hasOtpExp   = false;
+    $hasOtpAtt   = false;
+    $i = 0;
+    while ($i < $cols.length) {
+        $n = $cols[$i]["name"];
+        if ($n == "is_email_verified") { $hasVerified = true; }
+        if ($n == "otp_code")          { $hasOtp = true; }
+        if ($n == "otp_expires_at")    { $hasOtpExp = true; }
+        if ($n == "otp_attempts")      { $hasOtpAtt = true; }
+        $i = $i + 1;
+    }
+    if (!$hasVerified) { $sqlite.exec("ALTER TABLE users ADD COLUMN is_email_verified INTEGER DEFAULT 0"); }
+    if (!$hasOtp)      { $sqlite.exec("ALTER TABLE users ADD COLUMN otp_code TEXT"); }
+    if (!$hasOtpExp)   { $sqlite.exec("ALTER TABLE users ADD COLUMN otp_expires_at TEXT"); }
+    if (!$hasOtpAtt)   { $sqlite.exec("ALTER TABLE users ADD COLUMN otp_attempts INTEGER DEFAULT 0"); }
+
     // Promote the very first user to admin (idempotent — only if no admin exists yet)
     $adminCheck = $sqlite.query("SELECT id FROM users WHERE role = 'admin' LIMIT 1");
     if ($adminCheck.length == 0) {
         $firstUser = $sqlite.query("SELECT id, username FROM users ORDER BY id ASC LIMIT 1");
         if ($firstUser.length > 0) {
-            $sqlite.exec("UPDATE users SET role = 'admin' WHERE id = " + $firstUser[0]["id"]);
-            print("[db] promoted first user '" + $firstUser[0]["username"] + "' to admin");
+            $sqlite.exec("UPDATE users SET role = 'admin', is_email_verified = 1 WHERE id = " + $firstUser[0]["id"]);
+            print("[db] promoted first user '" + $firstUser[0]["username"] + "' to admin (auto-verified)");
         }
     }
 
-    print("[db] initialized — 15 tables ready (users, roadmaps, topics, items, progress, notes, chat, courses, modules, enrollments, announcements, thoughts, thought_likes, certificates, admin_applications)");
+    print("[db] initialized — 16 tables ready (users, roadmaps, topics, items, progress, notes, chat, courses, modules, enrollments, announcements, thoughts, thought_likes, certificates, admin_applications, events)");
 }
 
 // ---------- Users ----------
@@ -240,7 +288,7 @@ def listUsers() {
 }
 
 def getUserById($id) {
-    $rows = $sqlite.query("SELECT id, username, email, display_name, bio, avatar_url, role, created_at FROM users WHERE id = " + $id);
+    $rows = $sqlite.query("SELECT id, username, email, display_name, bio, avatar_url, role, is_email_verified, otp_code, otp_expires_at, otp_attempts, created_at FROM users WHERE id = " + $id);
     if ($rows.length == 0) { return null; }
     return $rows[0];
 }
@@ -733,3 +781,131 @@ def promoteUserToAdmin($userId) {
     $sqlite.exec("UPDATE users SET role = 'admin' WHERE id = " + $userId);
     return getUserById($userId);
 }
+
+// ============================================================================
+// Email verification (OTP)
+// ----------------------------------------------------------------------------
+//   Flow:
+//     1. User registers → is_email_verified=0, otp_code=NULL
+//     2. User asks for OTP → generate 6-digit code, store w/ 10-min expiry,
+//                              email it via Resend API (see otp.b)
+//     3. User submits code → verify against otp_code AND otp_expires_at AND
+//                              otp_attempts < 5 → set is_email_verified=1
+//     4. Wrong code → otp_attempts++
+//     5. After 5 wrong attempts, code is invalidated; user must request a new one
+// ============================================================================
+
+// Save a new OTP code + 10-min expiry, reset attempt counter.
+def setUserOtp($userId, $code) {
+    $sqlite.exec("UPDATE users SET otp_code = '" + sql($code) + "', "
+        + "otp_expires_at = datetime('now','+10 minutes'), "
+        + "otp_attempts = 0 WHERE id = " + $userId);
+}
+
+// Returns {otp_code, otp_expires_at, otp_attempts} or null.
+def getUserOtp($userId) {
+    $rows = $sqlite.query("SELECT otp_code, otp_expires_at, otp_attempts FROM users WHERE id = " + $userId);
+    if ($rows.length == 0) { return null; }
+    return $rows[0];
+}
+
+// Returns true if user has a non-null, non-expired OTP code with < 5 attempts.
+def hasValidOtp($userId) {
+    $rows = $sqlite.query("SELECT id FROM users WHERE id = " + $userId
+        + " AND otp_code IS NOT NULL"
+        + " AND otp_expires_at IS NOT NULL"
+        + " AND otp_expires_at > datetime('now')"
+        + " AND otp_attempts < 5");
+    return $rows.length > 0;
+}
+
+// Mark the user's email as verified and clear OTP fields.
+def markEmailVerified($userId) {
+    $sqlite.exec("UPDATE users SET is_email_verified = 1, "
+        + "otp_code = NULL, otp_expires_at = NULL, otp_attempts = 0 "
+        + "WHERE id = " + $userId);
+}
+
+// Increment brute-force counter (called on wrong code). Returns new count.
+def incrementOtpAttempts($userId) {
+    $sqlite.exec("UPDATE users SET otp_attempts = otp_attempts + 1 WHERE id = " + $userId);
+    $rows = $sqlite.query("SELECT otp_attempts FROM users WHERE id = " + $userId);
+    if ($rows.length == 0) { return 0; }
+    return $rows[0]["otp_attempts"];
+}
+
+// Invalidate OTP (after success OR too many attempts OR explicit clear).
+def clearOtp($userId) {
+    $sqlite.exec("UPDATE users SET otp_code = NULL, otp_expires_at = NULL, otp_attempts = 0 WHERE id = " + $userId);
+}
+
+// True if the user's email is verified.
+def isEmailVerified($userId) {
+    $rows = $sqlite.query("SELECT id FROM users WHERE id = " + $userId + " AND is_email_verified = 1");
+    return $rows.length > 0;
+}
+
+// ============================================================================
+// Real-time event bus
+// ----------------------------------------------------------------------------
+//   trackEvent($type, $verb, $payloadObj)
+//     — Inserts a row in `events`. $payloadObj is a Bantu map/object; we
+//        serialize it as JSON via a tiny hand-rolled serializer (Bantu v1.2.2
+//        has no JSON.stringify, but values are simple strings/numbers).
+//   listEventsSince($afterId)
+//     — Returns events with id > $afterId, oldest first, capped at 50.
+//   listRecentEvents($limit)
+//     — Returns the most recent $limit events (used on first load).
+// ============================================================================
+
+// Tiny JSON stringifier for flat maps of {string|number|bool} values.
+// Nested objects/arrays not supported — callers must pre-flatten.
+def _jsonStr($obj) {
+    if ($obj == null) { return "{}"; }
+    $s = "{";
+    $keys = ["type","verb","id","title","body","actor","username","category","reason","note","course_title","course_id","app_id","status","code"];
+    $i = 0;
+    $first = true;
+    while ($i < len($keys)) {
+        $k = $keys[$i];
+        $v = $obj[$k];
+        if ($v != null) {
+            if (!$first) { $s = $s + ","; }
+            $s = $s + "\"" + $k + "\":\"" + ("" + $v).replace("\"","\\\"").replace("\n"," ") + "\"";
+            $first = false;
+        }
+        $i = $i + 1;
+    }
+    $s = $s + "}";
+    return $s;
+}
+
+def trackEvent($type, $verb, $payload) {
+    if ($type == null || $type == "") { $type = "system"; }
+    if ($verb == null || $verb == "") { $verb = "created"; }
+    if ($payload == null) { $payload = {}; }
+    $json = _jsonStr($payload);
+    $sqlite.exec("INSERT INTO events (type, verb, payload) VALUES ('"
+        + sql($type) + "', '" + sql($verb) + "', '" + sql($json) + "')");
+}
+
+def listEventsSince($afterId) {
+    if ($afterId == null || $afterId == "") { $afterId = "0"; }
+    return $sqlite.query("SELECT id, type, verb, payload, created_at FROM events WHERE id > " + $afterId + " ORDER BY id ASC LIMIT 50");
+}
+
+def listRecentEvents($limit) {
+    if ($limit == null || $limit == "" || floor(num($limit)) < 1) { $limit = "10"; }
+    return $sqlite.query("SELECT id, type, verb, payload, created_at FROM events ORDER BY id DESC LIMIT " + $limit);
+}
+
+// Returns the highest event id (so the frontend can bootstrap its `since` cursor).
+def latestEventId() {
+    $rows = $sqlite.query("SELECT MAX(id) AS m FROM events");
+    if ($rows.length == 0) { return 0; }
+    $m = $rows[0]["m"];
+    if ($m == null) { return 0; }
+    return $m;
+}
+
+print("[db] module loaded — initDb + helpers for users, roadmaps, topics, items, progress, notes, chat, courses, announcements, thoughts, certificates, admin_applications, otp, events");
